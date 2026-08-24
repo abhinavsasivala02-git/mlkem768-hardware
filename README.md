@@ -50,9 +50,12 @@ FIPS-203 reference):
 | ML-KEM KeyGen | PASS — byte-exact `ek`/`dk` vs NIST (25/25) |
 | ML-KEM Encaps | PASS — byte-exact `K` + ciphertext |
 | ML-KEM Decaps | PASS — byte-exact `K`, and `K̄` on implicit rejection |
+| NIST KAT (10 vectors) | PASS — pre-generated in `sim/mem/nist/<i>/`, byte-exact KeyGen+Encaps+Decaps |
 
 The testbenches in `sim/tb/` are self-contained (seeds/keys are hard-coded and
-results self-checked); no external automation or reference scripts are required.
+results self-checked); the `joint_design/tb_mlkem_nist_kat.v` testbench loads the
+pre-generated NIST vectors from `sim/mem/nist/<i>/` via `$readmemh` — no external
+automation or reference scripts are required.
 
 ## Directory layout
 
@@ -68,8 +71,11 @@ rtl/            RTL sources
   mem/          poly_ram
   mlkem/        mlkem_top (AXI4-Lite), mlkem_core, mlkem_keygen, mlkem_encaps,
                 mlkem_decaps, mlkem_axi_lite_if
-sim/tb/         self-contained testbenches (tb_roundtrip, tb_f1600, tb_sha3, tb_ntt_clean,
+sim/            simulation sources
+  tb/           self-contained testbenches (tb_roundtrip, tb_f1600, tb_sha3, tb_ntt_clean,
                 tb_basemul, tb_kpke_*, tb_mlkem_*)
+  mem/          KAT vector header (mlkem_kat_vectors.vh) + NIST vectors (nist/<i>/*.mem)
+joint_design/   NIST end-to-end KAT testbench (tb_mlkem_nist_kat.v: KeyGen -> Encaps -> Decaps)
 syn/            synthesis constraints (mlkem_top.xdc, mlkem_top.sdc)
 ```
 
@@ -158,6 +164,20 @@ xsim -R rt_sim
 Other testbenches (`sim/tb/tb_f1600.v`, `tb_sha3.v`, `tb_ntt_clean.v`, `tb_basemul.v`,
 `tb_kpke_keygen.v`, `tb_kpke_encrypt.v`, `tb_mlkem_core.v`, `tb_mlkem_keygen.v`,
 `tb_mlkem_top.v`) are compiled the same way, with the corresponding top `xsim.tb_*`.
+
+**NIST KAT end-to-end** (`joint_design/tb_mlkem_nist_kat.v`) runs the pre-generated
+KeyGen → Encaps → Decaps vectors. Include `-i sim/mem` for `mlkem_kat_vectors.vh`, then
+run in one-vector slices (the full KAT is slow, so slice it like the mldsa flow):
+
+```tcl
+xvlog --work xsim -i rtl/pkg -i sim/mem $RTL joint_design/tb_mlkem_nist_kat.v
+xelab -debug typical -L xsim xsim.tb_mlkem_nist_kat -s nist_sim
+xsim -R nist_sim -testplusarg NIST_START=0 -testplusarg NIST_END=9 \
+     -testplusarg PHASE=0        # PHASE: 0=all 1=keygen 2=encaps 3=decaps
+```
+
+The testbenches load their data by relative path (`sim/mem/nist/<i>/*.mem`) via
+`$readmemh`, so always run from the project root.
 
 ## Tool notes
 
