@@ -61,8 +61,7 @@ MLKEM_work/
 │   └── mlkem/  mlkem_top.v, mlkem_core.v, mlkem_keygen.v,
 │              mlkem_encaps.v, mlkem_decaps.v, mlkem_axi_lite_if.v
 ├── tb/         self-contained verification testbenches (K-PKE roundtrip, hash, NTT, top-level, etc.)
-├── syn/        Genus synthesis script (syn_mlkem.tcl / run_genus.tcl) + constraints (mlkem_top.xdc, mlkem_top.sdc)
-└── run_rt_roundtrip.tcl   (Vivado batch simulation)
+└── syn/        Genus synthesis script (syn_mlkem.tcl / run_genus.tcl) + constraints (mlkem_top.xdc, mlkem_top.sdc)
 ```
 
 ### 2.1 Module map
@@ -198,7 +197,8 @@ iverilog -g2012 -o f1600 -I rtl/pkg rtl/keccak/keccak_f1600.v rtl/keccak/keccak_
 vvp f1600
 ```
 
-**Vivado (full top-level AXI testbench):** `vivado -mode batch -source run_rt_roundtrip.tcl`
+**Vivado (full top-level AXI testbench):** use `tb/tb_mlkem_top.v` with `xvlog`/`xelab`/`xsim`,
+or run the Vivado batch simulation on that testbench.
 (or the `syn/run_genus.tcl` / `syn/syn_mlkem.tcl` scripts for synthesis).
 
 ---
