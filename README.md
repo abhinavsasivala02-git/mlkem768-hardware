@@ -73,9 +73,8 @@ rtl/            RTL sources
                 mlkem_decaps, mlkem_axi_lite_if
 sim/            simulation sources
   tb/           self-contained testbenches (tb_roundtrip, tb_f1600, tb_sha3, tb_ntt_clean,
-                tb_basemul, tb_kpke_*, tb_mlkem_*)
+                tb_basemul, tb_kpke_*, tb_mlkem_*, tb_mlkem_nist_kat)
   mem/          KAT vector header (mlkem_kat_vectors.vh) + NIST vectors (nist/<i>/*.mem)
-joint_design/   NIST end-to-end KAT testbench (tb_mlkem_nist_kat.v: KeyGen -> Encaps -> Decaps)
 syn/            synthesis constraints (mlkem_top.xdc, mlkem_top.sdc)
 ```
 
@@ -165,12 +164,12 @@ Other testbenches (`sim/tb/tb_f1600.v`, `tb_sha3.v`, `tb_ntt_clean.v`, `tb_basem
 `tb_kpke_keygen.v`, `tb_kpke_encrypt.v`, `tb_mlkem_core.v`, `tb_mlkem_keygen.v`,
 `tb_mlkem_top.v`) are compiled the same way, with the corresponding top `xsim.tb_*`.
 
-**NIST KAT end-to-end** (`joint_design/tb_mlkem_nist_kat.v`) runs the pre-generated
+**NIST KAT end-to-end** (`sim/tb/tb_mlkem_nist_kat.v`) runs the pre-generated
 KeyGen → Encaps → Decaps vectors. Include `-i sim/mem` for `mlkem_kat_vectors.vh`, then
 run in one-vector slices (the full KAT is slow, so slice it like the mldsa flow):
 
 ```tcl
-xvlog --work xsim -i rtl/pkg -i sim/mem $RTL joint_design/tb_mlkem_nist_kat.v
+xvlog --work xsim -i rtl/pkg -i sim/mem $RTL sim/tb/tb_mlkem_nist_kat.v
 xelab -debug typical -L xsim xsim.tb_mlkem_nist_kat -s nist_sim
 xsim -R nist_sim -testplusarg NIST_START=0 -testplusarg NIST_END=9 \
      -testplusarg PHASE=0        # PHASE: 0=all 1=keygen 2=encaps 3=decaps
