@@ -75,7 +75,8 @@ sim/            simulation sources
   tb/           self-contained testbenches (tb_roundtrip, tb_f1600, tb_sha3, tb_ntt_clean,
                 tb_basemul, tb_kpke_*, tb_mlkem_*, tb_mlkem_nist_kat)
   mem/          KAT vector header (mlkem_kat_vectors.vh) + NIST vectors (nist/<i>/*.mem)
-syn/            synthesis constraints (mlkem_top.xdc, mlkem_top.sdc)
+syn/            Cadence Genus synthesis script (syn_mlkem.tcl) + constraints (mlkem_top.sdc,
+                mlkem_top.xdc)
 ```
 
 ## AXI register / memory map (byte-addressed)
