@@ -139,6 +139,75 @@ The testbenches load their data by relative path from `sim/mem/` (e.g.
 `iverilog` also works as a fast alternative for the self-checking testbenches
 (e.g. `iverilog -g2012 -o rt -I rtl/pkg $(find rtl -name '*.v') sim/tb/tb_roundtrip.v && vvp rt`).
 
+## Timing (measured cycle counts, ML-KEM-768 @ 100 MHz)
+
+Cycle counts below were measured on the RTL datapath (core computation only,
+excluding the AXI4-Lite register payload transfer of `ek`/`dk`/`ct`/seeds).
+
+| Operation | Clock cycles | Time @ 100 MHz |
+|-----------|--------------|----------------|
+| `ML-KEM-768.KeyGen` | 101,484 | ≈ 1.01 ms |
+| `ML-KEM-768.Encaps` | 132,895 | ≈ 1.33 ms |
+| `ML-KEM-768.Decaps` | 189,472 | ≈ 1.89 ms |
+| K-PKE round-trip (KeyGen → Encrypt → Decrypt) | ≈ 281,000 | ≈ 2.81 ms |
+
+| Primitive | Latency (cycles) |
+|-----------|------------------|
+| `keccak_f1600` permutation | 25 (24 rounds + load) |
+| SHA3-512 (`G`) | 25 per 72-byte block (+ squeeze) |
+| SHAKE-256 / SHA3-256 | 25 per 136-byte block (+ squeeze) |
+| NTT / inverse-NTT | 7 butterfly layers |
+| Base multiplication | 128 pointwise products |
+
+These are per-operation, single-shot latencies for one seed; they grow with the
+parameter set (larger `K` → more matrix/NTT work).
+
+## FSM state machines
+
+### `mlkem_hash_engine` — shared Keccak sponge (4 states)
+
+```
+S_ABSORB ──(rate full / absorb_last)──▶ S_PAD ──▶ S_PERMUTE ──(to_squeeze)──▶ S_SQUEEZE
+   ▲                                        ▲
+   └──────────────(mid-block permutation)────┘
+```
+
+### `mlkem_keygen` — ML-KEM.KeyGen (9 states)
+
+```
+IDLE → KPKE_KG → WAIT_KG → COPY_EK → HASH_EK → WAIT_HASH → WRITE_HASH → WRITE_Z → DONE
+```
+
+### `mlkem_encaps` — ML-KEM.Encaps (10 states)
+
+```
+IDLE → COPY_EK → HASH_EK → WAIT_H_EK → HASH_MH → WAIT_G → ENCRYPT → WAIT_ENC → OUTPUT → DONE
+```
+`HASH_EK` = `H(ek)`; `HASH_MH` = `G(m‖H(ek))` → `(K,r)`; `ENCRYPT` runs K-PKE.Encrypt;
+`OUTPUT` emits the shared secret.
+
+### `mlkem_decaps` — ML-KEM.Decaps (20 states)
+
+```
+IDLE → PARSE_DK → BUFFER → FEED_DEC → WAIT_DEC → HASH_MH → WAIT_G → KDF
+     → KDF_ABSORB_Z → KDF_ABSORB_C → WAIT_KDF → KDF_SQUEEZE → REENCRYPT
+     → REENC_COPY → FEED_REENC → WAIT_REENC → SELECT → DONE
+```
+`PARSE_DK` extracts `h`/`z`; `BUFFER` loads `dkPKE`/`c`; `FEED_DEC` streams to K-PKE.Decrypt
+→ `m'`; `KDF_*` = `K̄ = SHAKE-256(z‖c)`; `REENC_*` re-encrypts `c'=Encrypt(ek,m',r')`;
+`WAIT_REENC` does the constant-time `c==c'` compare; `SELECT` returns `K'` or `K̄`.
+
+### K-PKE datapath FSMs
+
+| Module | States | Flow |
+|--------|--------|------|
+| `kpke_keygen` | 30 | `G(d‖k)` → PRF/CBD `s,e` → NTT → `Â` sampling → basemul → `t̂` → encode |
+| `kpke_encrypt` | 52 | decode `ek` → CBD `y,e₁,e₂` → NTT → `Âᵀ∘ŷ` → INTT → compress → `c1‖c2` |
+| `kpke_decrypt` | 27 | decode `c1,c2` → decompress → NTT `u` → `ŝ∘û` → INTT → `v−w` → `m'` |
+
+All FSMs are single-process controllers using `*_valid`/`*_req`, `start`/`busy`/`done`
+handshakes to sequence the pipelined datapath blocks.
+
 ### Tool notes
 
 - Vivado 2023.2 path: `D:\vivado\2023.2\bin\vivado.bat`.
