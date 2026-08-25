@@ -162,40 +162,127 @@ excluding the AXI4-Lite register payload transfer of `ek`/`dk`/`ct`/seeds).
 These are per-operation, single-shot latencies for one seed; they grow with the
 parameter set (larger `K` → more matrix/NTT work).
 
+## ML-KEM dataflow
+
+```mermaid
+flowchart LR
+    subgraph KG[ML-KEM.KeyGen]
+        d[d] --> G[G = SHA3-512]
+        G --> rho[ρ] --> A[Â sampling · SHAKE-128]
+        G --> sig[σ] --> CBDs[CBD s] --> NTTs[NTT]
+        G --> CBDs
+        CBDs --> CDBe[CBD e] --> NTTe[NTT]
+        A --> BM[basemul · Â×ŝ]
+        NTTs --> BM
+        BM --> acc[+ ê] --> t[t̂ = Â·ŝ + ê]
+        t --> ek[ek = t̂ ‖ ρ]
+        ek --> dk[dk = dkPKE ‖ ek ‖ H(ek) ‖ z]
+    end
+    subgraph EC[ML-KEM.Encaps]
+        m[m] --> GH[G = SHA3-512(m ‖ H(ek))]
+        GH --> K[K]
+        GH --> r[r]
+        ek2[ek] --> EENC[K-PKE.Encrypt]
+        r --> EENC
+        m2[m] --> EENC
+        EENC --> c[c]
+    end
+    subgraph DC[ML-KEM.Decaps]
+        dk2[dk] --> DEC[K-PKE.Decrypt]
+        c2[c] --> DEC
+        DEC --> mp[m′]
+        mp --> GH2[G(m′ ‖ h)]
+        GH2 --> Kp[K′]
+        Kp --> REENC[K-PKE.Encrypt]
+        REENC --> cp[c′]
+        c2 --> EQ{c′==c?}
+        cp --> EQ
+        EQ -->|yes| Kout[K′]
+        EQ -->|no| Kbar[K̄ = SHAKE-256(z ‖ c)]
+    end
+```
+
 ## FSM state machines
 
 ### `mlkem_hash_engine` — shared Keccak sponge (4 states)
 
-```
-S_ABSORB ──(rate full / absorb_last)──▶ S_PAD ──▶ S_PERMUTE ──(to_squeeze)──▶ S_SQUEEZE
-   ▲                                        ▲
-   └──────────────(mid-block permutation)────┘
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> S_ABSORB
+    S_ABSORB --> S_PAD: absorb_last
+    S_ABSORB --> S_PERMUTE: rate full
+    S_PAD --> S_PERMUTE
+    S_PERMUTE --> S_ABSORB: !to_squeeze
+    S_PERMUTE --> S_SQUEEZE: to_squeeze
+    S_SQUEEZE --> S_SQUEEZE: squeeze_next
+    S_SQUEEZE --> S_PERMUTE: rate exhausted
+    S_SQUEEZE --> [*]
 ```
 
 ### `mlkem_keygen` — ML-KEM.KeyGen (9 states)
 
-```
-IDLE → KPKE_KG → WAIT_KG → COPY_EK → HASH_EK → WAIT_HASH → WRITE_HASH → WRITE_Z → DONE
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> KPKE_KG: start
+    KPKE_KG --> WAIT_KG
+    WAIT_KG --> COPY_EK: kpke_done
+    COPY_EK --> HASH_EK
+    HASH_EK --> WAIT_HASH
+    WAIT_HASH --> WRITE_HASH: h_hash_valid
+    WRITE_HASH --> WRITE_Z
+    WRITE_Z --> DONE
+    DONE --> IDLE: done
 ```
 
 ### `mlkem_encaps` — ML-KEM.Encaps (10 states)
 
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> COPY_EK: start
+    COPY_EK --> HASH_EK
+    HASH_EK --> WAIT_H_EK
+    WAIT_H_EK --> HASH_MH: h_hash_valid
+    HASH_MH --> WAIT_G
+    WAIT_G --> ENCRYPT: g_hash_valid
+    ENCRYPT --> WAIT_ENC
+    WAIT_ENC --> OUTPUT: enc_done
+    OUTPUT --> DONE
+    DONE --> IDLE
 ```
-IDLE → COPY_EK → HASH_EK → WAIT_H_EK → HASH_MH → WAIT_G → ENCRYPT → WAIT_ENC → OUTPUT → DONE
-```
-`HASH_EK` = `H(ek)`; `HASH_MH` = `G(m‖H(ek))` → `(K,r)`; `ENCRYPT` runs K-PKE.Encrypt;
-`OUTPUT` emits the shared secret.
+`HASH_EK` = `H(ek)`; `HASH_MH` = `G(m‖H(ek))` → `(K,r)`; `ENCRYPT` runs
+K-PKE.Encrypt; `OUTPUT` emits the shared secret `K`.
 
 ### `mlkem_decaps` — ML-KEM.Decaps (20 states)
 
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> PARSE_DK: start
+    PARSE_DK --> BUFFER
+    BUFFER --> FEED_DEC
+    FEED_DEC --> WAIT_DEC
+    WAIT_DEC --> HASH_MH: dec_done
+    HASH_MH --> WAIT_G
+    WAIT_G --> KDF: g_hash_valid
+    KDF --> KDF_ABSORB_Z
+    KDF_ABSORB_Z --> KDF_ABSORB_C
+    KDF_ABSORB_C --> WAIT_KDF
+    WAIT_KDF --> KDF_SQUEEZE
+    KDF_SQUEEZE --> REENCRYPT: k_bar ready
+    REENCRYPT --> REENC_COPY
+    REENC_COPY --> FEED_REENC
+    FEED_REENC --> WAIT_REENC
+    WAIT_REENC --> SELECT: reenc_done
+    SELECT --> DONE
+    DONE --> IDLE
 ```
-IDLE → PARSE_DK → BUFFER → FEED_DEC → WAIT_DEC → HASH_MH → WAIT_G → KDF
-     → KDF_ABSORB_Z → KDF_ABSORB_C → WAIT_KDF → KDF_SQUEEZE → REENCRYPT
-     → REENC_COPY → FEED_REENC → WAIT_REENC → SELECT → DONE
-```
-`PARSE_DK` extracts `h`/`z`; `BUFFER` loads `dkPKE`/`c`; `FEED_DEC` streams to K-PKE.Decrypt
-→ `m'`; `KDF_*` = `K̄ = SHAKE-256(z‖c)`; `REENC_*` re-encrypts `c'=Encrypt(ek,m',r')`;
-`WAIT_REENC` does the constant-time `c==c'` compare; `SELECT` returns `K'` or `K̄`.
+`PARSE_DK` extracts `h`/`z`; `BUFFER` loads `dkPKE`/`c`; `FEED_DEC` streams to
+K-PKE.Decrypt → `m'`; `KDF_*` = `K̄ = SHAKE-256(z‖c)`; `REENC_*` re-encrypts
+`c' = Encrypt(ek, m', r')`; `WAIT_REENC` does the constant-time `c == c'` compare;
+`SELECT` returns `K'` or `K̄`.
 
 ### K-PKE datapath FSMs
 
