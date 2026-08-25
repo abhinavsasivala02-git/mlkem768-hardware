@@ -284,17 +284,6 @@ K-PKE.Decrypt → `m'`; `KDF_*` = `K̄ = SHAKE-256(z‖c)`; `REENC_*` re-encrypt
 `c' = Encrypt(ek, m', r')`; `WAIT_REENC` does the constant-time `c == c'` compare;
 `SELECT` returns `K'` or `K̄`.
 
-### K-PKE datapath FSMs
-
-| Module | States | Flow |
-|--------|--------|------|
-| `kpke_keygen` | 30 | `G(d‖k)` → PRF/CBD `s,e` → NTT → `Â` sampling → basemul → `t̂` → encode |
-| `kpke_encrypt` | 52 | decode `ek` → CBD `y,e₁,e₂` → NTT → `Âᵀ∘ŷ` → INTT → compress → `c1‖c2` |
-| `kpke_decrypt` | 27 | decode `c1,c2` → decompress → NTT `u` → `ŝ∘û` → INTT → `v−w` → `m'` |
-
-All FSMs are single-process controllers using `*_valid`/`*_req`, `start`/`busy`/`done`
-handshakes to sequence the pipelined datapath blocks.
-
 ### Tool notes
 
 - Vivado 2023.2 path: `D:\vivado\2023.2\bin\vivado.bat`.
