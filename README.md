@@ -167,38 +167,42 @@ parameter set (larger `K` → more matrix/NTT work).
 ```mermaid
 flowchart LR
     subgraph KG[ML-KEM.KeyGen]
-        d[d] --> G[G = SHA3-512]
-        G --> rho[ρ] --> A[Â sampling · SHAKE-128]
-        G --> sig[σ] --> CBDs[CBD s] --> NTTs[NTT]
-        G --> CBDs
-        CBDs --> CDBe[CBD e] --> NTTe[NTT]
-        A --> BM[basemul · Â×ŝ]
-        NTTs --> BM
-        BM --> acc[+ ê] --> t[t̂ = Â·ŝ + ê]
-        t --> ek[ek = t̂ ‖ ρ]
-        ek --> dk[dk = dkPKE ‖ ek ‖ H(ek) ‖ z]
+        d --> G[G = SHA3-512]
+        G --> rho[rho]
+        rho --> A[A = matrix sampling SHAKE-128]
+        G --> sig[sigma]
+        sig --> s[CBD s]
+        s --> sNTT[NTT]
+        sig --> e[CBD e]
+        e --> eNTT[NTT]
+        A --> bm[basemul]
+        sNTT --> bm
+        bm --> t[t_hat]
+        eNTT --> t
+        t --> ek[ek = t_hat + rho]
+        ek --> dk[dk = dkPKE + ek + H(ek) + z]
     end
     subgraph EC[ML-KEM.Encaps]
-        m[m] --> GH[G = SHA3-512(m ‖ H(ek))]
-        GH --> K[K]
-        GH --> r[r]
-        ek2[ek] --> EENC[K-PKE.Encrypt]
-        r --> EENC
-        m2[m] --> EENC
-        EENC --> c[c]
+        m --> G2[G = SHA3-512 of m + H(ek)]
+        G2 --> K[K]
+        G2 --> r[r]
+        ek --> enc[K-PKE.Encrypt]
+        m --> enc
+        r --> enc
+        enc --> c[c]
     end
     subgraph DC[ML-KEM.Decaps]
-        dk2[dk] --> DEC[K-PKE.Decrypt]
-        c2[c] --> DEC
-        DEC --> mp[m′]
-        mp --> GH2[G(m′ ‖ h)]
-        GH2 --> Kp[K′]
-        Kp --> REENC[K-PKE.Encrypt]
-        REENC --> cp[c′]
-        c2 --> EQ{c′==c?}
-        cp --> EQ
-        EQ -->|yes| Kout[K′]
-        EQ -->|no| Kbar[K̄ = SHAKE-256(z ‖ c)]
+        dk --> dec[K-PKE.Decrypt]
+        c --> dec
+        dec --> mp[m-prime]
+        mp --> G3[G of m-prime + h]
+        G3 --> kp[K-prime]
+        kp --> re[K-PKE.Encrypt]
+        re --> cp[c-prime]
+        c --> eq{c-prime == c?}
+        cp --> eq
+        eq -->|yes| out[K-prime]
+        eq -->|no| kb[K-bar = SHAKE-256 z + c]
     end
 ```
 
@@ -213,7 +217,7 @@ stateDiagram-v2
     S_ABSORB --> S_PAD: absorb_last
     S_ABSORB --> S_PERMUTE: rate full
     S_PAD --> S_PERMUTE
-    S_PERMUTE --> S_ABSORB: !to_squeeze
+    S_PERMUTE --> S_ABSORB: to_squeeze = 0
     S_PERMUTE --> S_SQUEEZE: to_squeeze
     S_SQUEEZE --> S_SQUEEZE: squeeze_next
     S_SQUEEZE --> S_PERMUTE: rate exhausted
