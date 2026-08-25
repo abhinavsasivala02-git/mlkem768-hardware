@@ -162,50 +162,6 @@ excluding the AXI4-Lite register payload transfer of `ek`/`dk`/`ct`/seeds).
 These are per-operation, single-shot latencies for one seed; they grow with the
 parameter set (larger `K` → more matrix/NTT work).
 
-## ML-KEM dataflow
-
-```mermaid
-flowchart LR
-    subgraph KG[ML-KEM.KeyGen]
-        d --> G[G = SHA3-512]
-        G --> rho[rho]
-        rho --> A[A = matrix sampling SHAKE-128]
-        G --> sig[sigma]
-        sig --> s[CBD s]
-        s --> sNTT[NTT]
-        sig --> e[CBD e]
-        e --> eNTT[NTT]
-        A --> bm[basemul]
-        sNTT --> bm
-        bm --> t[t_hat]
-        eNTT --> t
-        t --> ek[ek = t_hat + rho]
-        ek --> dk[dk = dkPKE + ek + H(ek) + z]
-    end
-    subgraph EC[ML-KEM.Encaps]
-        m --> G2[G = SHA3-512 of m + H(ek)]
-        G2 --> K[K]
-        G2 --> r[r]
-        ek --> enc[K-PKE.Encrypt]
-        m --> enc
-        r --> enc
-        enc --> c[c]
-    end
-    subgraph DC[ML-KEM.Decaps]
-        dk --> dec[K-PKE.Decrypt]
-        c --> dec
-        dec --> mp[m-prime]
-        mp --> G3[G of m-prime + h]
-        G3 --> kp[K-prime]
-        kp --> re[K-PKE.Encrypt]
-        re --> cp[c-prime]
-        c --> eq{c-prime == c?}
-        cp --> eq
-        eq -->|yes| out[K-prime]
-        eq -->|no| kb[K-bar = SHAKE-256 z + c]
-    end
-```
-
 ## FSM state machines
 
 ### `mlkem_hash_engine` — shared Keccak sponge (4 states)
