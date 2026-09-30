@@ -32,20 +32,17 @@ module ntt (
     output reg         done,
     output reg         busy,
 
-    // Polynomial RAM interface — Port A (read/write)
     output reg         ram_wen,
     output reg  [7:0]  ram_addr_a,
     output reg  [11:0] ram_wdata_a,
     input  wire [11:0] ram_rdata_a,
 
-    // Polynomial RAM interface — Port B (read-only)
     output reg  [7:0]  ram_addr_b,
     input  wire [11:0] ram_rdata_b
 );
 
     `include "mlkem_params.vh"
 
-    // FSM states
     localparam S_IDLE      = 4'd0;
     localparam S_SETUP     = 4'd1;
     localparam S_READ      = 4'd2;
@@ -59,35 +56,29 @@ module ntt (
 
     reg [3:0] state, next_state;
 
-    // Layer and position counters
     reg [2:0]  layer;         // 0..6 (7 layers)
     reg [7:0]  j;             // butterfly index within group
     reg [7:0]  start_idx;     // start of current group
     reg [7:0]  len;           // half-length of current group
     reg [6:0]  k;             // zeta index (1..127)
 
-    // Butterfly I/O
     reg               bfly_valid_in;
     wire signed [15:0] bfly_a_out, bfly_b_out;
     wire              bfly_valid_out;
     reg  signed [15:0] bfly_a_in, bfly_b_in;
 
-    // Zeta ROM
     wire signed [15:0] zeta_val;
 
-    // Address computation
     wire [7:0] addr_lo, addr_hi;
     assign addr_lo = start_idx + j;
     assign addr_hi = start_idx + j + len;
 
-    // Instantiate zeta ROM (synchronous BRAM)
     ntt_rom u_zeta_rom (
         .clk  (clk),
         .addr (k),
         .zeta (zeta_val)
     );
 
-    // Instantiate butterfly (CT mode = 0)
     ntt_butterfly u_butterfly (
         .clk       (clk),
         .rst_n     (rst_n),
@@ -101,7 +92,6 @@ module ntt (
         .valid_out (bfly_valid_out)
     );
 
-    // FSM sequential
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             state <= S_IDLE;
@@ -109,7 +99,6 @@ module ntt (
             state <= next_state;
     end
 
-    // FSM combinational
     always @(*) begin
         next_state = state;
         case (state)
@@ -118,7 +107,7 @@ module ntt (
             S_READ:      next_state = S_WAIT;
             S_WAIT:      next_state = S_BFLY;
             S_BFLY:      next_state = S_BFLY_WAIT;
-            S_BFLY_WAIT: next_state = S_WRITE;
+            S_BFLY_WAIT: next_state = bfly_valid_out ? S_WRITE : S_BFLY_WAIT;
             S_WRITE:     next_state = S_WRITE2;
             S_WRITE2:    next_state = S_NEXT;
             S_NEXT: begin
@@ -137,7 +126,6 @@ module ntt (
         endcase
     end
 
-    // Datapath
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             done         <= 1'b0;
@@ -171,42 +159,35 @@ module ntt (
                 end
 
                 S_SETUP: begin
-                    // Start of new layer
                     start_idx <= 8'd0;
                     j         <= 8'd0;
                     k         <= k + 7'd1;
                 end
 
                 S_READ: begin
-                    // Issue RAM reads for pair (addr_lo, addr_hi)
                     ram_addr_a <= addr_lo;
                     ram_addr_b <= addr_hi;
                 end
 
                 S_WAIT: begin
-                    // Wait for RAM read latency
                 end
 
                 S_BFLY: begin
-                    // Feed butterfly
                     bfly_a_in     <= $signed({4'b0, ram_rdata_a});
                     bfly_b_in     <= $signed({4'b0, ram_rdata_b});
                     bfly_valid_in <= 1'b1;
                 end
 
                 S_BFLY_WAIT: begin
-                    // Wait for butterfly registered output pipeline
                 end
 
                 S_WRITE: begin
-                    // Write butterfly 'a' result to addr_lo
                     ram_wen     <= 1'b1;
                     ram_addr_a  <= addr_lo;
                     ram_wdata_a <= bfly_a_out[11:0];
                 end
 
                 S_WRITE2: begin
-                    // Write butterfly 'b' result to addr_hi
                     ram_wen     <= 1'b1;
                     ram_addr_a  <= addr_hi;
                     ram_wdata_a <= bfly_b_out[11:0];
@@ -214,10 +195,8 @@ module ntt (
 
                 S_NEXT: begin
                     if (j + 1 < len) begin
-                        // Next butterfly in same group
                         j <= j + 8'd1;
                     end else begin
-                        // Next group or next layer
                         if (start_idx + (len << 1) < MLKEM_N) begin
                             start_idx <= start_idx + (len << 1);
                             j         <= 8'd0;

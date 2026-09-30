@@ -32,7 +32,6 @@ module sha3_256 (
     input  wire          clk,
     input  wire          rst_n,
 
-    // Control
     input  wire          start,          // Begin new hash
     input  wire          data_valid,     // Input byte valid
     input  wire [7:0]    data_in,        // Input byte
@@ -40,16 +39,17 @@ module sha3_256 (
     input  wire          data_last,      // Last input byte
     output reg           hash_valid,     // Hash output valid (1-cycle pulse)
     output reg  [255:0]  hash_out,       // 32-byte hash output
-    output wire          busy
+    output wire          busy,
+
+    output wire [27:0] hb_req,
+    input  wire [10:0] hb_rsp
 );
 
-    // Sponge controller signals
     wire       sq_valid;
     wire [7:0] sq_data;
     reg        sq_next;
     reg  [4:0] out_cnt;    // 0..31
 
-    // SHA3-256 FSM
     localparam S_IDLE    = 2'd0;
     localparam S_ABSORB  = 2'd1;
     localparam S_SQUEEZE = 2'd2;
@@ -57,7 +57,6 @@ module sha3_256 (
 
     reg [1:0] state;
 
-    // Sponge instance: SHA3-256 (rate=136 bytes, domain=0x06)
     mlkem_hash_engine #(
         .RATE_BYTES (136),
         .DOMAIN_SEP (8'h06)
@@ -72,7 +71,9 @@ module sha3_256 (
         .squeeze_valid(sq_valid),
         .squeeze_data (sq_data),
         .squeeze_next (sq_next),
-        .busy         (busy)
+        .busy         (busy),
+        .hb_req       (hb_req),
+        .hb_rsp       (hb_rsp)
     );
 
     always @(posedge clk or negedge rst_n) begin
@@ -95,19 +96,10 @@ module sha3_256 (
                 end
 
                 S_ABSORB: begin
-                    // Only transition when engine ACTUALLY accepts absorb_last.
-                    // If the engine is mid-block-permutation (data_ready=0) when
-                    // data_last arrives and we transition anyway, the engine never
-                    // sees absorb_last → stays in S_ABSORB → deadlock.
                     if (data_valid && data_last && data_ready)
                         state <= S_SQUEEZE;
                 end
 
-                // Engine enters S_SQUEEZE automatically after padding permutation.
-                // Guard: only leave S_ABSORB when data_ready=1 so absorb_last is
-                // actually accepted. Without this, absorb_last arriving during a
-                // mid-block permutation leaves the engine stuck in S_ABSORB while
-                // sha3_256 waits in S_SQUEEZE — deadlock.
                 S_SQUEEZE: begin
                     if (sq_valid) begin
                         hash_out[out_cnt * 8 +: 8] <= sq_data;

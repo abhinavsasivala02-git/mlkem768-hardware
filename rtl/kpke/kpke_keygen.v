@@ -42,10 +42,28 @@ module kpke_keygen #(
     output reg  [12:0]   ek_addr,
     output reg           dk_valid,
     output reg  [7:0]    dk_data,
-    output reg  [12:0]   dk_addr
-);
+    output reg  [12:0]   dk_addr,
 
-    // ======================== FSM ========================
+    output wire [27:0]   hb_req,
+    input  wire [10:0]   hb_rsp
+);
+    wire [27:0] hb_req_g;  wire [10:0] hb_rsp_g;
+    wire [27:0] hb_req_xof;  wire [10:0] hb_rsp_xof;
+    wire [27:0] hb_req_prf;  wire [10:0] hb_rsp_prf;
+    wire [3*11-1:0] hb_rsp_v;
+    assign hb_rsp_g = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_xof = hb_rsp_v[1*11 +: 11];
+    assign hb_rsp_prf = hb_rsp_v[2*11 +: 11];
+
+    hash_mux #(.N(3)) u_hash_mux (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .c_req ({hb_req_prf, hb_req_xof, hb_req_g}),
+        .c_rsp (hb_rsp_v),
+        .m_req (hb_req),
+        .m_rsp (hb_rsp)
+    );
+
     localparam ST_IDLE        = 5'd0;
     localparam ST_HASH_SEED   = 5'd1;
     localparam ST_WAIT_HASH   = 5'd2;
@@ -86,7 +104,6 @@ module kpke_keygen #(
     reg [255:0] rho;
     reg [255:0] sigma;
 
-    // ======================== RAM Bank ========================
     wire [11:0] ram0_rdata_a, ram0_rdata_b;
     reg         ram0_wen;
     reg  [7:0]  ram0_addr_a, ram0_addr_b;
@@ -128,7 +145,6 @@ module kpke_keygen #(
         .b_addr(ram3_addr_b), .b_rdata(ram3_rdata_b)
     );
 
-    // ======================== SHA3-512: G() ========================
     reg          g_start, g_data_valid, g_data_last;
     reg  [7:0]   g_data_in;
     wire         g_hash_valid, g_busy, g_data_ready;
@@ -137,10 +153,11 @@ module kpke_keygen #(
     sha3_512 u_g_hash (
         .clk(clk), .rst_n(rst_n), .start(g_start),
         .data_valid(g_data_valid), .data_in(g_data_in), .data_ready(g_data_ready),
-        .data_last(g_data_last), .hash_valid(g_hash_valid), .hash_out(g_hash_out), .busy(g_busy)
+        .data_last(g_data_last), .hash_valid(g_hash_valid), .hash_out(g_hash_out), .busy(g_busy),
+        .hb_req        (hb_req_g),
+        .hb_rsp        (hb_rsp_g)
     );
 
-    // ======================== SampleNTT ========================
     reg          sntt_start;
     wire         sntt_done, sntt_busy, sntt_wen;
     wire [7:0]   sntt_addr;
@@ -150,10 +167,11 @@ module kpke_keygen #(
         .clk(clk), .rst_n(rst_n), .start(sntt_start),
         .seed(rho), .idx_i({4'd0, i_cnt}), .idx_j({4'd0, j_cnt}),
         .done(sntt_done), .busy(sntt_busy),
-        .poly_wen(sntt_wen), .poly_addr(sntt_addr), .poly_wdata(sntt_wdata)
+        .poly_wen(sntt_wen), .poly_addr(sntt_addr), .poly_wdata(sntt_wdata),
+        .hb_req        (hb_req_xof),
+        .hb_rsp        (hb_rsp_xof)
     );
 
-    // ======================== SHAKE-256: PRF ========================
     reg          prf_start, prf_absorb_valid, prf_absorb_last, prf_squeeze_req;
     reg  [7:0]   prf_absorb_data;
     wire         prf_absorb_ready, prf_squeeze_valid, prf_busy;
@@ -164,10 +182,11 @@ module kpke_keygen #(
         .absorb_valid(prf_absorb_valid), .absorb_data(prf_absorb_data),
         .absorb_ready(prf_absorb_ready), .absorb_last(prf_absorb_last),
         .squeeze_req(prf_squeeze_req), .squeeze_valid(prf_squeeze_valid),
-        .squeeze_data(prf_squeeze_data), .busy(prf_busy)
+        .squeeze_data(prf_squeeze_data), .busy(prf_busy),
+        .hb_req        (hb_req_prf),
+        .hb_rsp        (hb_rsp_prf)
     );
 
-    // ======================== SamplePolyCBD ========================
     reg          cbd_start;
     wire         cbd_done, cbd_busy, cbd_wen;
     wire [7:0]   cbd_addr;
@@ -181,7 +200,6 @@ module kpke_keygen #(
         .poly_wen(cbd_wen), .poly_addr(cbd_addr), .poly_wdata(cbd_wdata)
     );
 
-    // ======================== NTT (unified core) ========================
     reg          ntt_start;
     wire         ntt_done, ntt_busy, ntt_wen;
     wire [7:0]   ntt_addr_a, ntt_addr_b;
@@ -200,7 +218,6 @@ module kpke_keygen #(
         .ram_rdata_a(ram_ntt_rdata_a), .ram_addr_b(ntt_addr_b), .ram_rdata_b(ram_ntt_rdata_b)
     );
 
-    // ======================== Polynomial BaseMul ========================
     reg          bmul_start;
     wire         bmul_done, bmul_busy, bmul_wen;
     wire [7:0]   bmul_a_addr, bmul_b_addr, bmul_c_addr;
@@ -214,7 +231,6 @@ module kpke_keygen #(
         .c_wen(bmul_wen), .c_addr(bmul_c_addr), .c_wdata(bmul_c_wdata)
     );
 
-    // ======================== Polynomial Arithmetic ========================
     reg          arith_start;
     reg  [1:0]   arith_mode;
     wire         arith_done, arith_busy, arith_wen;
@@ -229,7 +245,6 @@ module kpke_keygen #(
         .c_wen(arith_wen), .c_addr(arith_c_addr), .c_wdata(arith_c_wdata)
     );
 
-    // ======================== ByteEncode_12 ========================
     reg          enc_start;
     wire         enc_done, enc_busy, enc_byte_valid;
     wire [7:0]   enc_byte_data, enc_poly_addr;
@@ -246,7 +261,6 @@ module kpke_keygen #(
         .byte_valid(enc_byte_valid), .byte_data(enc_byte_data), .byte_addr(enc_byte_addr)
     );
 
-    // ======================== Combinational RAM Mux ========================
     always @(*) begin
         ram0_wen = 1'b0; ram0_addr_a = 8'd0; ram0_addr_b = 8'd0; ram0_wdata = 12'd0;
         ram1_wen = 1'b0; ram1_addr_a = 8'd0; ram1_addr_b = 8'd0; ram1_wdata = 12'd0;
@@ -315,7 +329,6 @@ module kpke_keygen #(
         endcase
     end
 
-    // ======================== FSM Logic ========================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state <= ST_IDLE; done <= 1'b0; busy <= 1'b0;

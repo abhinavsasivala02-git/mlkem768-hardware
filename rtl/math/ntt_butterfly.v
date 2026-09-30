@@ -39,22 +39,15 @@ module ntt_butterfly (
     output reg               valid_out
 );
 
-    // Internal signals
-    (* use_dsp = "no" *) wire signed [31:0] product;
+    wire signed [31:0] product;
     wire        [11:0] mont_result;
     wire signed [15:0] t_mont;
 
-    // Intermediate butterfly values
-    wire signed [15:0] ct_a, ct_b;
-    wire signed [15:0] gs_a, gs_b;
     wire signed [15:0] gs_diff;
-    (* use_dsp = "no" *) wire signed [31:0] gs_product;
+    wire signed [31:0] gs_product;
     wire        [11:0] gs_mont_result;
     wire signed [15:0] gs_t_mont;
-    wire [11:0] ct_a_barrett, ct_b_barrett;
-    wire [11:0] gs_a_barrett;
 
-    // --- CT butterfly: t = mont_reduce(zeta * b); a' = a+t; b' = a-t ---
     assign product = zeta * b_in;
 
     montgomery_reduce u_mont_ct (
@@ -63,12 +56,8 @@ module ntt_butterfly (
     );
 
     assign t_mont = $signed({1'b0, mont_result});
-    assign ct_a   = a_in + t_mont;
-    assign ct_b   = a_in - t_mont;
 
-    // --- GS butterfly: a' = a+b; diff = b-a; b' = mont_reduce(zeta * diff) ---
     assign gs_diff    = b_in - a_in;
-    assign gs_a       = a_in + b_in;
     assign gs_product = zeta * gs_diff;
 
     montgomery_reduce u_mont_gs (
@@ -78,31 +67,53 @@ module ntt_butterfly (
 
     assign gs_t_mont = $signed({1'b0, gs_mont_result});
 
-    // --- Registered output ---
+    reg signed [15:0] s1_a, s1_b, s1_t;
+    reg               s1_mode, s1_valid;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            s1_a     <= 16'sd0;
+            s1_b     <= 16'sd0;
+            s1_t     <= 16'sd0;
+            s1_mode  <= 1'b0;
+            s1_valid <= 1'b0;
+        end else begin
+            s1_valid <= valid_in;
+            if (valid_in) begin
+                s1_a    <= a_in;
+                s1_b    <= b_in;
+                s1_mode <= mode;
+                s1_t    <= (mode == 1'b0) ? t_mont : gs_t_mont;
+            end
+        end
+    end
+
+    wire signed [15:0] p_ct_a = s1_a + s1_t;
+    wire signed [15:0] p_ct_b = s1_a - s1_t;
+    wire signed [15:0] p_gs_a = s1_a + s1_b;
+    wire [11:0] p_ct_a_barrett, p_ct_b_barrett, p_gs_a_barrett;
+
+    barrett_reduce u_barrett_ct_a (.a(p_ct_a), .result(p_ct_a_barrett));
+    barrett_reduce u_barrett_ct_b (.a(p_ct_b), .result(p_ct_b_barrett));
+    barrett_reduce u_barrett_gs_a (.a(p_gs_a), .result(p_gs_a_barrett));
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             a_out     <= 16'sd0;
             b_out     <= 16'sd0;
             valid_out <= 1'b0;
         end else begin
-            valid_out <= valid_in;
-            if (valid_in) begin
-                if (mode == 1'b0) begin
-                    // Cooley-Tukey (forward)
-                    a_out <= {4'b0, ct_a_barrett};
-                    b_out <= {4'b0, ct_b_barrett};
+            valid_out <= s1_valid;
+            if (s1_valid) begin
+                if (s1_mode == 1'b0) begin
+                    a_out <= {4'b0, p_ct_a_barrett};
+                    b_out <= {4'b0, p_ct_b_barrett};
                 end else begin
-                    // Gentleman-Sande (inverse)
-                    a_out <= {4'b0, gs_a_barrett};
-                    b_out <= {4'b0, gs_t_mont};
+                    a_out <= {4'b0, p_gs_a_barrett};
+                    b_out <= s1_t;
                 end
             end
         end
     end
-
-    // Barrett-reduce CT outputs to [0, q-1] so values fit the 12-bit RAM
-    barrett_reduce u_barrett_ct_a (.a(ct_a), .result(ct_a_barrett));
-    barrett_reduce u_barrett_ct_b (.a(ct_b), .result(ct_b_barrett));
-    barrett_reduce u_barrett_gs_a (.a(gs_a), .result(gs_a_barrett));
 
 endmodule

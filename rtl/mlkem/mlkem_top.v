@@ -48,7 +48,6 @@ module mlkem_top #(
     input  wire        clk,
     input  wire        rst_n,
 
-    // AXI4-Lite Slave Interface
     input  wire [7:0]  s_axi_awaddr,
     input  wire        s_axi_awvalid,
     output wire        s_axi_awready,
@@ -67,13 +66,9 @@ module mlkem_top #(
     output wire        s_axi_rvalid,
     input  wire        s_axi_rready,
 
-    // Interrupt output
     output wire        irq_done
 );
 
-    // ===== Internal wires =====
-
-    // AXI-to-Core control
     wire [1:0]   op_sel;
     wire         op_start;
     wire         op_done;
@@ -81,22 +76,19 @@ module mlkem_top #(
     wire [255:0] seed_d, seed_z, seed_m;
     wire         ss_valid;
     wire [255:0] shared_secret;
+    wire         op_error;   // Sec 7.2 / 7.3 input check failed
 
-    // Buffer interface from AXI
     wire [12:0]  axi_buf_addr;
     wire [7:0]   axi_buf_wdata;
     wire         axi_buf_wen;
     wire [1:0]   axi_buf_sel;
     wire [7:0]   axi_buf_rdata;
 
-    // Buffer interface from core
     wire [12:0]  core_ek_addr, core_dk_addr, core_ct_addr;
     wire         core_ek_wen,  core_dk_wen,  core_ct_wen;
     wire [7:0]   core_ek_wdata, core_dk_wdata, core_ct_wdata;
     wire [7:0]   core_ek_rdata, core_dk_rdata, core_ct_rdata;
 
-    // ===== EK Buffer RAM =====
-    // Max size: 1568 bytes (ML-KEM-1024)
     reg [7:0] ek_mem [0:1567];
     reg [7:0] ek_rdata_reg;
 
@@ -112,8 +104,6 @@ module mlkem_top #(
 
     assign core_ek_rdata = ek_rdata_reg;
 
-    // ===== DK Buffer RAM =====
-    // Max size: 3168 bytes (ML-KEM-1024)
     reg [7:0] dk_mem [0:3167];
     reg [7:0] dk_rdata_reg;
 
@@ -129,8 +119,6 @@ module mlkem_top #(
 
     assign core_dk_rdata = dk_rdata_reg;
 
-    // ===== CT Buffer RAM =====
-    // Max size: 1568 bytes (ML-KEM-1024)
     reg [7:0] ct_mem [0:1567];
     reg [7:0] ct_rdata_reg;
 
@@ -146,12 +134,10 @@ module mlkem_top #(
 
     assign core_ct_rdata = ct_rdata_reg;
 
-    // AXI buffer read mux
     assign axi_buf_rdata = (axi_buf_sel == 2'd0) ? ek_rdata_reg :
                            (axi_buf_sel == 2'd1) ? dk_rdata_reg :
                            (axi_buf_sel == 2'd2) ? ct_rdata_reg : 8'd0;
 
-    // ===== AXI4-Lite Interface =====
     mlkem_axi_lite_if #(
         .ADDR_WIDTH (8),
         .DATA_WIDTH (32)
@@ -184,6 +170,7 @@ module mlkem_top #(
         .seed_m         (seed_m),
         .ss_valid       (ss_valid),
         .shared_secret  (shared_secret),
+        .op_error       (op_error),
         .buf_addr       (axi_buf_addr),
         .buf_wdata      (axi_buf_wdata),
         .buf_wen        (axi_buf_wen),
@@ -191,7 +178,6 @@ module mlkem_top #(
         .buf_rdata      (axi_buf_rdata)
     );
 
-    // ===== ML-KEM Core =====
     mlkem_core #(
         .K    (K),
         .ETA1 (ETA1),
@@ -221,10 +207,10 @@ module mlkem_top #(
         .ct_wdata      (core_ct_wdata),
         .ct_rdata      (core_ct_rdata),
         .ss_valid      (ss_valid),
-        .shared_secret (shared_secret)
+        .shared_secret (shared_secret),
+        .op_error      (op_error)
     );
 
-    // Interrupt: asserted when operation completes
     assign irq_done = op_done;
 
 endmodule

@@ -33,11 +33,9 @@ module byte_encode #(
     output reg         done,
     output reg         busy,
 
-    // Input polynomial RAM — read interface
     output reg  [7:0]  poly_addr,
     input  wire [11:0] poly_rdata,
 
-    // Output byte stream
     output reg         byte_valid,
     output reg  [7:0]  byte_data,
     output reg  [10:0] byte_addr     // Address in output buffer (0..32*D-1)
@@ -47,7 +45,6 @@ module byte_encode #(
 
     localparam TOTAL_BYTES = 32 * D;
 
-    // FSM
     localparam S_IDLE    = 3'd0;
     localparam S_READ    = 3'd1;
     localparam S_WAIT    = 3'd2;
@@ -57,7 +54,6 @@ module byte_encode #(
 
     reg [2:0] state;
 
-    // Bit accumulator
     reg [23:0] bit_acc;     // Accumulator for partial bits
     reg [4:0]  bit_cnt;     // Number of valid bits in accumulator
     reg [8:0]  coeff_idx;   // Current coefficient index (0..255)
@@ -103,7 +99,6 @@ module byte_encode #(
                 end
 
                 S_PACK: begin
-                    // Add D bits from coefficient into accumulator
                     bit_acc <= bit_acc | ({{12{1'b0}}, poly_rdata[D-1:0]} << bit_cnt);
                     bit_cnt <= bit_cnt + D[4:0];
                     coeff_idx <= coeff_idx + 9'd1;
@@ -112,18 +107,15 @@ module byte_encode #(
 
                 S_EMIT: begin
                     if (bit_cnt >= 5'd8) begin
-                        // Emit a byte
                         byte_valid   <= 1'b1;
                         byte_data    <= bit_acc[7:0];
                         byte_addr    <= out_byte_cnt;
                         bit_acc      <= bit_acc >> 8;
                         bit_cnt      <= bit_cnt - 5'd8;
                         out_byte_cnt <= out_byte_cnt + 11'd1;
-                        // Stay in EMIT if more bytes can be extracted
                     end else if (coeff_idx < 9'd256) begin
                         state <= S_READ;    // Need more coefficients
                     end else if (bit_cnt > 5'd0) begin
-                        // Emit remaining bits as final byte
                         byte_valid   <= 1'b1;
                         byte_data    <= bit_acc[7:0];
                         byte_addr    <= out_byte_cnt;

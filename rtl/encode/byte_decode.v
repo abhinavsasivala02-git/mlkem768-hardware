@@ -32,12 +32,10 @@ module byte_decode #(
     input  wire        start,
     output reg         done,
     output reg         busy,
-    // Input byte stream
     input  wire        byte_valid,
     input  wire [7:0]  byte_data,
     output reg         byte_req,
 
-    // Output polynomial RAM — write interface
     output reg         poly_wen,
     output reg  [7:0]  poly_addr,
     output reg  [11:0] poly_wdata
@@ -47,7 +45,6 @@ module byte_decode #(
 
     localparam TOTAL_BYTES = 32 * D;
 
-    // FSM
     localparam S_IDLE    = 3'd0;
     localparam S_FETCH   = 3'd1;
     localparam S_UNPACK  = 3'd2;
@@ -56,18 +53,15 @@ module byte_decode #(
 
     reg [2:0] state;
 
-    // Bit accumulator
     reg [23:0] bit_acc;
     reg [4:0]  bit_cnt;
     reg [8:0]  coeff_idx;      // 0..255
     reg [10:0] in_byte_cnt;    // 0..TOTAL_BYTES-1
 
-    // Extracted coefficient (before mod q)
     wire [11:0] raw_coeff;
     wire [11:0] reduced_coeff;
 
     assign raw_coeff = bit_acc[D-1:0];
-    // For d=12, reduce mod q; for d<12, no reduction needed
     assign reduced_coeff = (D == 12 && raw_coeff >= MLKEM_Q[11:0]) ?
                            raw_coeff - MLKEM_Q[11:0] : raw_coeff;
 
@@ -105,7 +99,6 @@ module byte_decode #(
 
                 S_FETCH: begin
                     if (byte_valid) begin
-                        // Add 8 bits to accumulator
                         bit_acc <= bit_acc | ({16'd0, byte_data} << bit_cnt);
                         bit_cnt <= bit_cnt + 5'd8;
                         in_byte_cnt <= in_byte_cnt + 11'd1;

@@ -28,20 +28,20 @@ module shake128 (
     input  wire        clk,
     input  wire        rst_n,
 
-    // Control
     input  wire        start,          // reset sponge (safe from any state)
 
-    // Absorb interface
     input  wire        absorb_valid,
     input  wire [7:0]  absorb_data,
     output wire        absorb_ready,
     input  wire        absorb_last,
 
-    // Squeeze interface
     input  wire        squeeze_req,
     output wire        squeeze_valid,
     output wire [7:0]  squeeze_data,
-    output wire        busy
+    output wire        busy,
+
+    output wire [27:0] hb_req,
+    input  wire [10:0] hb_rsp
 );
 
     mlkem_hash_engine #(
@@ -58,7 +58,9 @@ module shake128 (
         .squeeze_valid(squeeze_valid),
         .squeeze_data (squeeze_data),
         .squeeze_next (squeeze_req),
-        .busy         (busy)
+        .busy         (busy),
+        .hb_req       (hb_req),
+        .hb_rsp       (hb_rsp)
     );
 
 endmodule

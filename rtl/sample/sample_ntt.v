@@ -40,15 +40,16 @@ module sample_ntt (
     output reg         done,
     output reg         busy,
 
-    // Output polynomial RAM — write interface
     output reg         poly_wen,
     output reg  [7:0]  poly_addr,
-    output reg  [11:0] poly_wdata
+    output reg  [11:0] poly_wdata,
+
+    output wire [27:0] hb_req,
+    input  wire [10:0] hb_rsp
 );
 
     `include "mlkem_params.vh"
 
-    // FSM states
     localparam S_IDLE       = 4'd0;
     localparam S_ABSORB_SEED = 4'd1;
     localparam S_ABSORB_IDX  = 4'd2;
@@ -62,7 +63,6 @@ module sample_ntt (
 
     reg [3:0] state;
 
-    // SHAKE-128 interface
     reg          shake_start;
     reg          shake_absorb_valid;
     reg  [7:0]   shake_absorb_data;
@@ -73,24 +73,18 @@ module sample_ntt (
     wire [7:0]   shake_squeeze_data;
     wire         shake_busy;
 
-    // Byte counter for seed absorption
     reg [5:0] seed_byte_cnt;   // 0..33
 
-    // Squeezed bytes
     reg [7:0] b0, b1, b2;
 
-    // Candidate values
     wire [11:0] d1, d2;
     assign d1 = {b1[3:0], b0};               // b0 + 256*(b1 mod 16)
     assign d2 = {b2, b1[7:4]};               // floor(b1/16) + 16*b2
 
-    // Coefficient counter
     reg [8:0] coeff_cnt;     // 0..255
 
-    // Sub-state for checking d1 then d2
     reg check_d2;
 
-    // SHAKE-128 instance
     shake128 u_shake128 (
         .clk           (clk),
         .rst_n         (rst_n),
@@ -102,7 +96,9 @@ module sample_ntt (
         .squeeze_req   (shake_squeeze_req),
         .squeeze_valid (shake_squeeze_valid),
         .squeeze_data  (shake_squeeze_data),
-        .busy          (shake_busy)
+        .busy          (shake_busy),
+        .hb_req        (hb_req),
+        .hb_rsp        (hb_rsp)
     );
 
     always @(posedge clk or negedge rst_n) begin
@@ -170,9 +166,6 @@ module sample_ntt (
                 end
 
                 S_WAIT_PERM: begin
-                    // Wait for permutation to complete, then start squeezing.
-                    // Capture byte 0 here so the engine's first valid pulse is
-                    // not wasted (engine drops valid when req is low).
                     if (shake_squeeze_valid) begin
                         b0                <= shake_squeeze_data;
                         shake_squeeze_req <= 1'b1;
@@ -206,7 +199,6 @@ module sample_ntt (
 
                 S_CHECK: begin
                     if (!check_d2) begin
-                        // Check d1
                         if (d1 < MLKEM_Q[11:0] && coeff_cnt < 9'd256) begin
                             poly_wen   <= 1'b1;
                             poly_addr  <= coeff_cnt[7:0];
@@ -215,7 +207,6 @@ module sample_ntt (
                         end
                         check_d2 <= 1'b1;
                     end else begin
-                        // Check d2
                         if (d2 < MLKEM_Q[11:0] && coeff_cnt < 9'd256) begin
                             poly_wen   <= 1'b1;
                             poly_addr  <= coeff_cnt[7:0];

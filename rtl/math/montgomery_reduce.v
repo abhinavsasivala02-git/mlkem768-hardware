@@ -36,25 +36,19 @@ module montgomery_reduce (
     output wire        [11:0] result
 );
 
-    // ---- Parameters (inlined from mlkem_params.vh) ----
     localparam MLKEM_Q    = 13'd3329;
     localparam MLKEM_QINV = 16'd62209;
-    // ---------------------------------------------------
     (* use_dsp = "no" *) wire signed [15:0] t;
     (* use_dsp = "no" *) wire signed [31:0] u;
     wire signed [15:0] r;
     wire signed [15:0] r_corrected;
 
-    // Step 1: t = (int16)(a * QINV)  - keep only low 16 bits
     assign t = a[15:0] * MLKEM_QINV;
 
-    // Step 2: u = t * q  (sign-extend t, multiply by q)
     assign u = $signed(t) * $signed({1'b0, MLKEM_Q[12:0]});
 
-    // Step 3: r = (a - u) >> 16  - exact division by R
     assign r = (a - u) >>> 16;
 
-    // Step 4: Conditional correction to [0, q-1]
     assign r_corrected = (r < 0)                                 ? (r + $signed({1'b0, MLKEM_Q[12:0]})) :
                          (r >= $signed({1'b0, MLKEM_Q[12:0]}))   ? (r - $signed({1'b0, MLKEM_Q[12:0]})) :
                          r;

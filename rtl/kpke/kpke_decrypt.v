@@ -34,17 +34,14 @@ module kpke_decrypt #(
     output reg           done,
     output reg           busy,
 
-    // Ciphertext input
     input  wire          ct_valid,
     input  wire [7:0]    ct_data,
     output reg           ct_req,
 
-    // Decryption key input
     input  wire          dk_valid,
     input  wire [7:0]    dk_data,
     output reg           dk_req,
 
-    // Recovered message output
     output reg           msg_valid,
     output reg  [255:0]  msg_out
 );
@@ -81,11 +78,6 @@ module kpke_decrypt #(
     reg [3:0] i_cnt;
     reg [8:0] clr_idx;
 
-    // RAM Bank
-    // ram0: u[i] (decoded from c1), K*256 deep; [0..255] doubles as w accumulator
-    // ram1: v (decoded from c2)
-    // ram2: s_hat[i] (decoded from dk), K*256 deep
-    // ram3: basemul product scratch / final m' output
     wire [11:0] ram0_rdata_a, ram0_rdata_b;
     reg ram0_wen; reg [9:0] ram0_addr_a, ram0_addr_b; reg [11:0] ram0_wdata;
 
@@ -103,7 +95,6 @@ module kpke_decrypt #(
     poly_ram #(.DEPTH(768),.ADDR_W(10)) u_ram2 (.clk(clk),.a_wen(ram2_wen),.a_addr(ram2_addr_a),.a_wdata(ram2_wdata),.a_rdata(ram2_rdata_a),.b_addr(ram2_addr_b),.b_rdata(ram2_rdata_b));
     poly_ram u_ram3 (.clk(clk),.a_wen(ram3_wen),.a_addr(ram3_addr_a),.a_wdata(ram3_wdata),.a_rdata(ram3_rdata_a),.b_addr(ram3_addr_b),.b_rdata(ram3_rdata_b));
 
-    // Sub-modules
     reg bdec_u_start; wire bdec_u_done, bdec_u_busy, bdec_u_wen, bdec_u_req;
     wire [7:0] bdec_u_addr; wire [11:0] bdec_u_wdata;
     byte_decode #(.D(DU)) u_bdec_u (
@@ -144,10 +135,8 @@ module kpke_decrypt #(
         .poly_wen(bdec_dk_wen),.poly_addr(bdec_dk_addr),.poly_wdata(bdec_dk_wdata)
     );
 
-    // Unified NTT core (forward & inverse)
     reg ntt_start; reg ntt_mode_reg;
     wire ntt_done, ntt_busy, ntt_wen; wire [7:0] ntt_addr_a, ntt_addr_b; wire [11:0] ntt_wdata_a;
-    // ntt_ram_sel: 0=forward NTT of u_i (ram0[i*256..]), 1=INTT of w (ram0[0..255])
     reg ntt_ram_sel;
     wire [11:0] ntt_rd_a = ram0_rdata_a;
     wire [11:0] ntt_rd_b = ram0_rdata_b;
@@ -169,8 +158,6 @@ module kpke_decrypt #(
 
     reg arith_start; reg [1:0] arith_mode; wire arith_done, arith_busy, arith_wen;
     wire [7:0] arith_a_addr, arith_b_addr, arith_c_addr; wire [11:0] arith_c_wdata;
-    // During accumulation (ST_ADD_MUL): a = ram0[0..255] partial sum, b = ram3 product
-    // During ST_SUB_V: a = ram1 (v), b = ram0 (w)
     wire [11:0] arith_a_rd, arith_b_rd;
     assign arith_a_rd = (state==ST_ADD_MUL || state==ST_WAIT_ADD) ? ram0_rdata_a : ram1_rdata_a;
     assign arith_b_rd = (state==ST_ADD_MUL || state==ST_WAIT_ADD) ? ram3_rdata_a : ram0_rdata_a;
@@ -198,7 +185,6 @@ module kpke_decrypt #(
         .byte_valid(enc_m_byte_valid),.byte_data(enc_m_byte_data),.byte_addr(enc_m_byte_addr)
     );
 
-    // Combinational RAM mux
     always @(*) begin
         ram0_wen=0; ram0_addr_a=10'd0; ram0_addr_b=10'd0; ram0_wdata=12'd0;
         ram1_wen=0; ram1_addr_a=8'd0; ram1_addr_b=8'd0; ram1_wdata=12'd0;
@@ -235,7 +221,6 @@ module kpke_decrypt #(
                 ram2_addr_a={i_cnt[1:0],bmul_a_addr};
                 ram0_addr_a={i_cnt[1:0],bmul_b_addr};
                 if (i_cnt == 4'd0) begin
-                    // i=0: product written directly to ram0[0..255] as initial accumulator
                     ram0_wen=bmul_wen; ram0_addr_a=bmul_wen?bmul_c_addr:{i_cnt[1:0],bmul_b_addr};
                     ram0_wdata=bmul_c_wdata;
                 end else begin
@@ -243,7 +228,6 @@ module kpke_decrypt #(
                 end
             end
             ST_ADD_MUL, ST_WAIT_ADD: begin
-                // Accumulate w: a=ram0[0..255](partial sum) + b=ram3(product) -> ram0[0..255]
                 ram0_addr_a = arith_wen ? arith_c_addr : arith_a_addr;
                 ram3_addr_a = arith_b_addr;
                 ram0_wen=arith_wen; ram0_wdata=arith_c_wdata;
@@ -254,7 +238,6 @@ module kpke_decrypt #(
                 ram0_wen=ntt_wen; ram0_wdata=ntt_wdata_a;
             end
             ST_SUB_V, ST_WAIT_SUB: begin
-                // m' = compress(v - w): a=ram1(v), b=ram0(w), result -> ram3
                 ram1_addr_a = arith_a_addr;
                 ram0_addr_a = arith_b_addr;
                 ram3_addr_a = arith_wen ? arith_c_addr : 8'd0;
@@ -271,7 +254,6 @@ module kpke_decrypt #(
         endcase
     end
 
-    // FSM
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state<=ST_IDLE; done<=0; busy<=0; msg_valid<=0; msg_out<=256'd0;
@@ -347,7 +329,6 @@ module kpke_decrypt #(
                 ST_WAIT_MUL: begin
                     if (bmul_done) begin
                         if (i_cnt == 4'd0) begin
-                            // i=0 product already wrote ram0[0..255] (initial w accumulator)
                             if (K == 1) begin
                                 ntt_start<=1; ntt_mode_reg<=1; ntt_ram_sel<=1; state<=ST_INTT_W;
                             end else begin

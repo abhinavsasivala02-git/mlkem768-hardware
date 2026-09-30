@@ -1,0 +1,17 @@
+# Generated KAT vectors
+# regenerate: python tb/kat/gen_vectors.py --download -o tb/kat/vectors
+tb/kat/vectors/
+
+# Synthesis / implementation outputs
+syn/reports/
+*.jou
+*.log
+*.pb
+.Xil/
+xsim.dir/
+*.vvp
+*.dcp
+
+# Python
+__pycache__/
+*.pyc

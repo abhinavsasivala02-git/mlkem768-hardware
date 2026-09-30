@@ -34,11 +34,9 @@ module decompress #(
     output reg         done,
     output reg         busy,
 
-    // Input polynomial RAM — read (D-bit values in 12-bit field)
     output reg  [7:0]  in_addr,
     input  wire [11:0] in_rdata,
 
-    // Output polynomial RAM — write (12-bit values)
     output reg         out_wen,
     output reg  [7:0]  out_addr,
     output reg  [11:0] out_wdata
@@ -56,7 +54,6 @@ module decompress #(
     reg [2:0] state;
     reg [8:0] idx;
 
-    // Decompress: y * q + 2^(d-1) >> d
     wire [23:0] product;
     wire [23:0] rounded;
     wire [11:0] decompressed;

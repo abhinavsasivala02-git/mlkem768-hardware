@@ -40,8 +40,25 @@ module mlkem_keygen #(
 
     output reg           dk_wen,
     output reg  [12:0]   dk_addr,
-    output reg  [7:0]    dk_wdata
+    output reg  [7:0]    dk_wdata,
+
+    output wire [27:0]   hb_req,
+    input  wire [10:0]   hb_rsp
 );
+    wire [27:0] hb_req_h;  wire [10:0] hb_rsp_h;
+    wire [27:0] hb_req_kpke;  wire [10:0] hb_rsp_kpke;
+    wire [2*11-1:0] hb_rsp_v;
+    assign hb_rsp_h = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_kpke = hb_rsp_v[1*11 +: 11];
+
+    hash_mux #(.N(2)) u_hash_mux (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .c_req ({hb_req_kpke, hb_req_h}),
+        .c_rsp (hb_rsp_v),
+        .m_req (hb_req),
+        .m_rsp (hb_rsp)
+    );
 
     `include "mlkem_params.vh"
 
@@ -69,13 +86,13 @@ module mlkem_keygen #(
         .clk(clk), .rst_n(rst_n), .start(kpke_start), .d_seed(d_seed),
         .done(kpke_done), .busy(kpke_busy),
         .ek_valid(kpke_ek_valid), .ek_data(kpke_ek_data), .ek_addr(kpke_ek_addr),
-        .dk_valid(kpke_dk_valid), .dk_data(kpke_dk_data), .dk_addr(kpke_dk_addr)
+        .dk_valid(kpke_dk_valid), .dk_data(kpke_dk_data), .dk_addr(kpke_dk_addr),
+        .hb_req(hb_req_kpke), .hb_rsp(hb_rsp_kpke)
     );
 
-    // SHA3-256 for H(ek)
-    reg          h_start, h_data_valid, h_data_last;
-    reg          h_prs, h_lst;
-    reg  [7:0]   h_data_in;
+    reg          h_start;
+    wire         h_data_valid, h_data_last;
+    wire [7:0]   h_data_in;
     wire         h_hash_valid, h_data_ready;
     wire [255:0] h_hash_out;
 
@@ -84,13 +101,18 @@ module mlkem_keygen #(
         .data_valid(h_data_valid), .data_in(h_data_in),
         .data_ready(h_data_ready),
         .data_last(h_data_last),
-        .hash_valid(h_hash_valid), .hash_out(h_hash_out), .busy()
+        .hash_valid(h_hash_valid), .hash_out(h_hash_out), .busy(),
+        .hb_req(hb_req_h), .hb_rsp(hb_rsp_h)
     );
 
     reg [12:0] copy_cnt;
     reg [4:0]  hash_byte_cnt;
     reg [7:0]  ek_buf [0:1567];
     reg [12:0] ek_buf_len;
+
+    assign h_data_valid = (state == ST_HASH_EK);
+    assign h_data_in    = ek_buf[copy_cnt];
+    assign h_data_last  = h_data_valid && (copy_cnt == ek_buf_len - 13'd1);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -99,13 +121,10 @@ module mlkem_keygen #(
             ek_addr <= 0; dk_addr <= 0;
             ek_wdata <= 0; dk_wdata <= 0;
             kpke_start <= 0; h_start <= 0;
-            h_data_valid <= 0; h_data_in <= 0; h_data_last <= 0;
-            h_prs <= 0; h_lst <= 0;
             copy_cnt <= 0; hash_byte_cnt <= 0; ek_buf_len <= 0;
         end else begin
             ek_wen <= 0; dk_wen <= 0;
             kpke_start <= 0; h_start <= 0;
-            h_data_valid <= 0; h_data_last <= 0;
             done <= 0;
 
             case (state)
@@ -146,27 +165,12 @@ module mlkem_keygen #(
                         copy_cnt <= copy_cnt + 1;
                 end
 
-                // Hash ek — absorb-acknowledged handshake (present → hold →
-                // advance-on-absorb). Avoids the duplicate/skip that a plain
-                // NBA ready-gated feed causes at mid-block Keccak permutations.
                 ST_HASH_EK: begin
-                    h_data_valid <= 1'b0;
-                    h_data_last  <= 1'b0;
-                    if (h_prs) begin
-                        h_prs <= 1'b0;
-                        if (h_lst) begin
+                    if (h_data_valid && h_data_ready) begin
+                        if (copy_cnt == ek_buf_len - 1)
                             state <= ST_WAIT_HASH;
-                        end else begin
+                        else
                             copy_cnt <= copy_cnt + 1;
-                        end
-                    end else if (h_data_ready) begin
-                        h_data_valid <= 1'b1;
-                        h_data_in    <= ek_buf[copy_cnt];
-                        h_prs        <= 1'b1;
-                        if (copy_cnt == ek_buf_len - 1) begin
-                            h_data_last <= 1'b1;
-                            h_lst       <= 1'b1;
-                        end
                     end
                 end
 

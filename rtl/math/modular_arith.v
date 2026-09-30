@@ -35,15 +35,12 @@ module modular_arith (
     wire [11:0] add_result;
     wire [11:0] sub_result;
 
-    // --- Addition: (a + b) mod q ---
     assign sum = {1'b0, a} + {1'b0, b};
     assign add_result = (sum >= {1'b0, MLKEM_Q[11:0]}) ? sum[11:0] - MLKEM_Q[11:0] : sum[11:0];
 
-    // --- Subtraction: (a - b + q) mod q ---
     assign diff = {1'b0, a} - {1'b0, b};
     assign sub_result = diff[12] ? diff[11:0] + MLKEM_Q[11:0] : diff[11:0];  // if borrow, add q
 
-    // --- Output mux ---
     assign result = op ? sub_result : add_result;
 
 endmodule

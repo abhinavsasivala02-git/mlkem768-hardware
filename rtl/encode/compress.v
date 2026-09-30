@@ -38,11 +38,9 @@ module compress #(
     output reg         done,
     output reg         busy,
 
-    // Input polynomial RAM - read
     output reg  [7:0]  in_addr,
     input  wire [11:0] in_rdata,
 
-    // Output polynomial RAM - write
     output reg         out_wen,
     output reg  [7:0]  out_addr,
     output reg  [11:0] out_wdata
@@ -50,7 +48,6 @@ module compress #(
 
     `include "mlkem_params.vh"
 
-    // FSM
     localparam S_IDLE  = 3'd0;
     localparam S_READ  = 3'd1;
     localparam S_WAIT  = 3'd2;
@@ -62,13 +59,10 @@ module compress #(
     reg [2:0] state;
     reg [8:0] idx;
 
-    // ---- Compression computation (FIPS 203 exact) ----
     localparam Q = 3329;
     localparam Q_BIT_WIDTH = 12;   // bit_width(3329) = 12
     localparam R = (1 << (2 * Q_BIT_WIDTH)) / Q;   // 5039
     localparam RSHIFT = 2 * Q_BIT_WIDTH;           // 24
-    // quotient0 = (dividend * R) >> RSHIFT
-    // max dividend = (q-1) << 11 = 3328<<11 = 6815744 < 2^23
     wire [22:0]  dividend;
     wire [34:0]  prod;
     wire [11:0]  quotient0;
@@ -80,7 +74,6 @@ module compress #(
 
     assign rem0 = dividend - quotient0 * Q;
 
-    // term1 = (q/2 - rem) >> 31 & 1 ; term2 = (q + q/2 - rem) >> 31 & 1
     wire signed [24:0] t1 = $signed({2'b0, 23'd1664}) - $signed({2'b0, rem0});
     wire signed [24:0] t2 = $signed({2'b0, 23'd4993}) - $signed({2'b0, rem0});
     wire [1:0] add1 = (t1[24] == 1'b1) ? 1'b1 : 1'b0;   // negative => add 1

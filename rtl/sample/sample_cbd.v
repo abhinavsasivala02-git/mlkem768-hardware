@@ -37,24 +37,19 @@ module sample_cbd #(
     output reg         done,
     output reg         busy,
 
-    // PRF byte input (from SHAKE-256)
     input  wire        prf_valid,
     input  wire [7:0]  prf_data,
     output reg         prf_req,
 
-    // Output polynomial RAM - write interface
     output reg         poly_wen,
     output reg  [7:0]  poly_addr,
     output reg  [11:0] poly_wdata
 );
 
-    // ---- Parameters (inlined from mlkem_params.vh) ----
     localparam MLKEM_Q = 13'd3329;
-    // ---------------------------------------------------
     localparam BYTES_NEEDED = 64 * ETA;   // 128 for ?=2, 192 for ?=3
     localparam BITS_PER_COEFF = 2 * ETA;  // 4 for ?=2, 6 for ?=3
 
-    // FSM
     localparam S_IDLE    = 3'd0;
     localparam S_COLLECT = 3'd1;
     localparam S_PROCESS = 3'd2;
@@ -64,27 +59,20 @@ module sample_cbd #(
 
     reg [2:0] state;
 
-    // Byte buffer - store all PRF bytes
     reg [7:0] prf_buf [0:191];   // Max 192 bytes for ?=3
     reg [7:0] byte_cnt;
 
-    // Coefficient processing
     reg [8:0] coeff_idx;    // 0..255
     reg [10:0] bit_offset;
 
-    // Registered bit extraction (continuous-assign function-of-memory does not
-    // re-evaluate when prf_buf contents change, leaving coeff 0 stale/X)
     reg [5:0] extracted_bits_reg;
 
-    // Popcount computation
     wire [2:0] pop_a, pop_b;
     wire signed [3:0] cbd_val;
     wire [11:0] cbd_unsigned;
 
-    // Extract bits for current coefficient from buffer
     wire [5:0] extracted_bits;  // Up to 6 bits
 
-    // Bit extraction: get BITS_PER_COEFF bits starting at bit_offset
     function [5:0] get_bits;
         input [10:0] offset;
         reg [7:0] byte0, byte1;
@@ -99,7 +87,6 @@ module sample_cbd #(
         end
     endfunction
 
-    // Popcount for 2 or 3 bits
     function [2:0] popcount3;
         input [2:0] bits;
         begin
@@ -116,7 +103,6 @@ module sample_cbd #(
 
     assign extracted_bits = extracted_bits_reg;
 
-    // Split into two halves and compute popcount difference
     generate
         if (ETA == 2) begin : gen_eta2
             assign pop_a = {1'b0, popcount2(extracted_bits[1:0])};
@@ -129,7 +115,6 @@ module sample_cbd #(
 
     assign cbd_val = $signed({1'b0, pop_a}) - $signed({1'b0, pop_b});
 
-    // Convert signed CBD value to unsigned mod q
     assign cbd_unsigned = (cbd_val < 0) ? (MLKEM_Q[11:0] + {{8{cbd_val[3]}}, cbd_val}) : {{8{1'b0}}, cbd_val};
 
     always @(posedge clk or negedge rst_n) begin
@@ -162,7 +147,6 @@ module sample_cbd #(
                 end
 
                 S_COLLECT: begin
-                    // Collect all PRF bytes into buffer
                     if (prf_valid) begin
                         prf_buf[byte_cnt] <= prf_data;
                         if (byte_cnt == BYTES_NEEDED - 1) begin

@@ -32,7 +32,6 @@ module sha3_512 (
     input  wire          clk,
     input  wire          rst_n,
 
-    // Control
     input  wire          start,
     input  wire          data_valid,
     input  wire [7:0]    data_in,
@@ -40,7 +39,10 @@ module sha3_512 (
     input  wire          data_last,
     output reg           hash_valid,     // 1-cycle pulse when done
     output reg  [511:0]  hash_out,       // 64-byte hash output
-    output wire          busy
+    output wire          busy,
+
+    output wire [27:0] hb_req,
+    input  wire [10:0] hb_rsp
 );
 
     wire       sq_valid;
@@ -55,7 +57,6 @@ module sha3_512 (
 
     reg [1:0] state;
 
-    // Sponge instance: SHA3-512 (rate=72 bytes, domain=0x06)
     mlkem_hash_engine #(
         .RATE_BYTES (72),
         .DOMAIN_SEP (8'h06)
@@ -70,7 +71,9 @@ module sha3_512 (
         .squeeze_valid(sq_valid),
         .squeeze_data (sq_data),
         .squeeze_next (sq_next),
-        .busy         (busy)
+        .busy         (busy),
+        .hb_req       (hb_req),
+        .hb_rsp       (hb_rsp)
     );
 
     always @(posedge clk or negedge rst_n) begin
@@ -93,13 +96,10 @@ module sha3_512 (
                 end
 
                 S_ABSORB: begin
-                    // Only transition when engine ACTUALLY accepts absorb_last.
                     if (data_valid && data_last && data_ready)
                         state <= S_SQUEEZE;
                 end
 
-                // Engine enters S_SQUEEZE automatically after padding permutation.
-                // sq_valid goes high once the first byte is ready.
                 S_SQUEEZE: begin
                     if (sq_valid) begin
                         hash_out[out_cnt * 8 +: 8] <= sq_data;

@@ -32,13 +32,11 @@ module ntt_core (
     output reg         done,
     output reg         busy,
 
-    // Polynomial RAM interface - Port A (read/write)
     output reg         ram_wen,
     output reg  [7:0]  ram_addr_a,
     output reg  [11:0] ram_wdata_a,
     input  wire [11:0] ram_rdata_a,
 
-    // Polynomial RAM interface - Port B (read-only)
     output reg  [7:0]  ram_addr_b,
     input  wire [11:0] ram_rdata_b
 );
@@ -46,7 +44,6 @@ module ntt_core (
     localparam MLKEM_N      = 9'd256;
     localparam MLKEM_INTT_F = 16'd512;
 
-    // FSM states
     localparam S_IDLE      = 4'd0;
     localparam S_SETUP     = 4'd1;
     localparam S_READ      = 4'd2;
@@ -65,7 +62,6 @@ module ntt_core (
     reg [3:0] state, next_state;
     reg       mode_reg;
 
-    // Layer and position counters
     reg [2:0]  layer;
     reg [7:0]  j;
     reg [7:0]  start_idx;
@@ -73,17 +69,14 @@ module ntt_core (
     reg [6:0]  k;
     reg [8:0]  scale_idx;
 
-    // Butterfly I/O
     reg               bfly_valid_in;
     wire signed [15:0] bfly_a_out, bfly_b_out;
     wire              bfly_valid_out;
     reg  signed [15:0] bfly_a_in, bfly_b_in;
 
-    // Zeta ROM
     wire signed [15:0] zeta_val;
 
-    // Montgomery multiply for INTT final scaling
-    (* use_dsp = "no" *) wire signed [31:0] scale_product;
+    wire signed [31:0] scale_product;
     wire [11:0] scale_result;
     assign scale_product = $signed({4'b0, ram_rdata_a}) * $signed(MLKEM_INTT_F);
 
@@ -92,19 +85,16 @@ module ntt_core (
         .result (scale_result)
     );
 
-    // Address computation
     wire [7:0] addr_lo, addr_hi;
     assign addr_lo = start_idx + j;
     assign addr_hi = start_idx + j + len;
 
-    // Zeta ROM (shared)
     ntt_rom u_zeta_rom (
         .clk  (clk),
         .addr (k),
         .zeta (zeta_val)
     );
 
-    // Butterfly (mode selects CT vs GS)
     ntt_butterfly u_butterfly (
         .clk       (clk),
         .rst_n     (rst_n),
@@ -118,7 +108,6 @@ module ntt_core (
         .valid_out (bfly_valid_out)
     );
 
-    // FSM sequential
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             state <= S_IDLE;
@@ -126,7 +115,6 @@ module ntt_core (
             state <= next_state;
     end
 
-    // FSM combinational
     always @(*) begin
         next_state = state;
         case (state)
@@ -135,7 +123,7 @@ module ntt_core (
             S_READ:      next_state = S_WAIT;
             S_WAIT:      next_state = S_BFLY;
             S_BFLY:      next_state = S_BFLY_WAIT;
-            S_BFLY_WAIT: next_state = S_WRITE;
+            S_BFLY_WAIT: next_state = bfly_valid_out ? S_WRITE : S_BFLY_WAIT;
             S_WRITE:     next_state = S_WRITE2;
             S_WRITE2:    next_state = S_NEXT;
             S_NEXT: begin
@@ -159,7 +147,6 @@ module ntt_core (
         endcase
     end
 
-    // Datapath
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             done          <= 1'b0;
@@ -190,8 +177,6 @@ module ntt_core (
                         busy     <= 1'b1;
                         mode_reg <= mode;
                         layer    <= 3'd0;
-                        // Forward NTT: start len=128, k=0 (increments from 1)
-                        // Inverse NTT: start len=2, k=127 (decrements)
                         if (mode == 1'b0) begin
                             len <= 8'd128;
                             k   <= 7'd0;
@@ -215,7 +200,6 @@ module ntt_core (
                 end
 
                 S_WAIT: begin
-                    // RAM read latency
                 end
 
                 S_BFLY: begin
@@ -225,7 +209,6 @@ module ntt_core (
                 end
 
                 S_BFLY_WAIT: begin
-                    // Wait for butterfly registered output pipeline
                 end
 
                 S_WRITE: begin
@@ -262,13 +245,11 @@ module ntt_core (
                     end
                 end
 
-                // --- INTT final scaling by f = 1441 ---
                 S_SCALE_RD: begin
                     ram_addr_a <= scale_idx[7:0];
                 end
 
                 S_SCALE_WT: begin
-                    // Wait for read
                 end
 
                 S_SCALE_WB: begin

@@ -36,46 +36,40 @@ module mlkem_core #(
     input  wire          clk,
     input  wire          rst_n,
 
-    // Control
     input  wire [1:0]    op_sel,       // 00=KeyGen, 01=Encaps, 10=Decaps
     input  wire          op_start,     // Start selected operation
     output wire          op_done,      // Operation complete
     output wire          op_busy,      // Operation in progress
 
-    // Seed/randomness inputs (from AXI register interface)
     input  wire [255:0]  seed_d,       // KeyGen seed d
     input  wire [255:0]  seed_z,       // KeyGen implicit rejection z
     input  wire [255:0]  seed_m,       // Encaps random message m
 
-    // EK buffer interface
     output wire [12:0]   ek_addr,
     output wire          ek_wen,
     output wire [7:0]    ek_wdata,
     input  wire [7:0]    ek_rdata,
 
-    // DK buffer interface
     output wire [12:0]   dk_addr,
     output wire          dk_wen,
     output wire [7:0]    dk_wdata,
     input  wire [7:0]    dk_rdata,
 
-    // CT buffer interface
     output wire [12:0]   ct_addr,
     output wire          ct_wen,
     output wire [7:0]    ct_wdata,
     input  wire [7:0]    ct_rdata,
 
-    // Shared secret output
     output wire          ss_valid,
-    output wire [255:0]  shared_secret
+    output wire [255:0]  shared_secret,
+
+    output wire          op_error
 );
 
-    // Operation select
     localparam OP_KEYGEN = 2'b00;
     localparam OP_ENCAPS = 2'b01;
     localparam OP_DECAPS = 2'b10;
 
-    // KeyGen instance
     wire         kg_done, kg_busy;
     wire         kg_ek_wen, kg_dk_wen;
     wire [12:0]  kg_ek_addr, kg_dk_addr;
@@ -94,10 +88,11 @@ module mlkem_core #(
         .ek_wdata  (kg_ek_wdata),
         .dk_wen    (kg_dk_wen),
         .dk_addr   (kg_dk_addr),
-        .dk_wdata  (kg_dk_wdata)
+        .dk_wdata  (kg_dk_wdata),
+        .hb_req    (hb_req_kg),
+        .hb_rsp    (hb_rsp_kg)
     );
 
-    // Encaps instance
     wire         enc_done, enc_busy;
     wire         enc_ct_wen, enc_ss_valid;
     wire [12:0]  enc_ct_addr, enc_ek_raddr;
@@ -117,10 +112,22 @@ module mlkem_core #(
         .ct_addr       (enc_ct_addr),
         .ct_wdata      (enc_ct_wdata),
         .ss_valid      (enc_ss_valid),
-        .shared_secret (enc_shared_secret)
+        .shared_secret (enc_shared_secret),
+        .enc_start     (enc_start_enc),
+        .enc_message   (enc_msg_enc),
+        .enc_r_seed    (enc_r_enc),
+        .enc_ek_valid  (enc_ekv_enc),
+        .enc_ek_data   (enc_ekd_enc),
+        .enc_done      (sh_enc_done),
+        .enc_ek_req    (sh_enc_ek_req),
+        .enc_ct_valid  (sh_enc_ct_valid),
+        .enc_ct_data   (sh_enc_ct_data),
+        .enc_ct_addr   (sh_enc_ct_addr),
+        .hb_req        (hb_req_en),
+        .hb_rsp        (hb_rsp_en),
+        .ek_invalid    (enc_ek_invalid)
     );
 
-    // Decaps instance
     wire         dec_done, dec_busy;
     wire         dec_ss_valid;
     wire [12:0]  dec_dk_raddr, dec_ct_raddr;
@@ -137,10 +144,90 @@ module mlkem_core #(
         .ct_rdata      (ct_rdata),
         .ct_raddr      (dec_ct_raddr),
         .ss_valid      (dec_ss_valid),
-        .shared_secret (dec_shared_secret)
+        .shared_secret (dec_shared_secret),
+        .reenc_start   (enc_start_dec),
+        .reenc_message (enc_msg_dec),
+        .reenc_r_seed  (enc_r_dec),
+        .reenc_ek_valid(enc_ekv_dec),
+        .reenc_ek_data (enc_ekd_dec),
+        .reenc_done    (sh_enc_done),
+        .reenc_ek_req  (sh_enc_ek_req),
+        .reenc_ct_valid(sh_enc_ct_valid),
+        .reenc_ct_data (sh_enc_ct_data),
+        .reenc_ct_addr (sh_enc_ct_addr),
+        .hb_req        (hb_req_de),
+        .hb_rsp        (hb_rsp_de),
+        .dk_invalid    (dec_dk_invalid)
     );
 
-    // Output muxing based on active operation
+    kpke_encrypt #(.K(K), .ETA1(ETA1), .ETA2(ETA2), .DU(DU), .DV(DV)) u_kpke_enc_shared (
+        .clk      (clk),
+        .rst_n    (rst_n),
+        .start    ((active_op == OP_DECAPS) ? enc_start_dec : enc_start_enc),
+        .done     (sh_enc_done),
+        .busy     (),
+        .ek_valid ((active_op == OP_DECAPS) ? enc_ekv_dec : enc_ekv_enc),
+        .ek_data  ((active_op == OP_DECAPS) ? enc_ekd_dec : enc_ekd_enc),
+        .ek_req   (sh_enc_ek_req),
+        .message  ((active_op == OP_DECAPS) ? enc_msg_dec : enc_msg_enc),
+        .r_seed   ((active_op == OP_DECAPS) ? enc_r_dec   : enc_r_enc),
+        .ct_valid (sh_enc_ct_valid),
+        .ct_data  (sh_enc_ct_data),
+        .ct_addr  (sh_enc_ct_addr),
+        .hb_req   (hb_req_ke),
+        .hb_rsp   (hb_rsp_ke)
+    );
+
+    wire         enc_start_enc,  enc_start_dec;
+    wire [255:0] enc_msg_enc,    enc_msg_dec;
+    wire [255:0] enc_r_enc,      enc_r_dec;
+    wire         enc_ekv_enc,    enc_ekv_dec;
+    wire [7:0]   enc_ekd_enc,    enc_ekd_dec;
+
+    wire enc_ek_invalid;
+    wire dec_dk_invalid;
+
+    wire [27:0] hb_req_kg, hb_req_en, hb_req_de, hb_req_ke;
+    wire [10:0] hb_rsp_kg, hb_rsp_en, hb_rsp_de, hb_rsp_ke;
+    wire [4*11-1:0] hb_rsp_v;
+    assign hb_rsp_kg = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_en = hb_rsp_v[1*11 +: 11];
+    assign hb_rsp_de = hb_rsp_v[2*11 +: 11];
+    assign hb_rsp_ke = hb_rsp_v[3*11 +: 11];
+
+    wire [27:0] hb_req_top;
+    wire [10:0] hb_rsp_top;
+
+    hash_mux #(.N(4)) u_hash_mux_top (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .c_req ({hb_req_ke, hb_req_de, hb_req_en, hb_req_kg}),
+        .c_rsp (hb_rsp_v),
+        .m_req (hb_req_top),
+        .m_rsp (hb_rsp_top)
+    );
+
+    keccak_sponge u_sponge (
+        .clk           (clk),
+        .rst_n         (rst_n),
+        .rate_bytes    (hb_req_top[26:19]),
+        .domain_sep    (hb_req_top[18:11]),
+        .init          (hb_req_top[27]),
+        .absorb_valid  (hb_req_top[10]),
+        .absorb_data   (hb_req_top[9:2]),
+        .absorb_ready  (hb_rsp_top[10]),
+        .absorb_last   (hb_req_top[1]),
+        .squeeze_valid (hb_rsp_top[9]),
+        .squeeze_data  (hb_rsp_top[8:1]),
+        .squeeze_next  (hb_req_top[0]),
+        .busy          (hb_rsp_top[0])
+    );
+
+    wire         sh_enc_done, sh_enc_ek_req;
+    wire         sh_enc_ct_valid;
+    wire [7:0]   sh_enc_ct_data;
+    wire [12:0]  sh_enc_ct_addr;
+
     reg [1:0] active_op;
 
     always @(posedge clk or negedge rst_n) begin
@@ -150,7 +237,6 @@ module mlkem_core #(
             active_op <= op_sel;
     end
 
-    // Done/busy
     assign op_done = (active_op == OP_KEYGEN) ? kg_done :
                      (active_op == OP_ENCAPS) ? enc_done :
                      (active_op == OP_DECAPS) ? dec_done : 1'b0;
@@ -159,28 +245,27 @@ module mlkem_core #(
                      (active_op == OP_ENCAPS) ? enc_busy :
                      (active_op == OP_DECAPS) ? dec_busy : 1'b0;
 
-    // EK bus
     assign ek_wen   = (active_op == OP_KEYGEN) ? kg_ek_wen : 1'b0;
     assign ek_addr  = (active_op == OP_KEYGEN) ? kg_ek_addr :
                       (active_op == OP_ENCAPS) ? enc_ek_raddr : 13'd0;
     assign ek_wdata = kg_ek_wdata;
 
-    // DK bus
     assign dk_wen   = (active_op == OP_KEYGEN) ? kg_dk_wen : 1'b0;
     assign dk_addr  = (active_op == OP_KEYGEN) ? kg_dk_addr :
                       (active_op == OP_DECAPS) ? dec_dk_raddr : 13'd0;
     assign dk_wdata = kg_dk_wdata;
 
-    // CT bus
     assign ct_wen   = (active_op == OP_ENCAPS) ? enc_ct_wen : 1'b0;
     assign ct_addr  = (active_op == OP_ENCAPS) ? enc_ct_addr :
                       (active_op == OP_DECAPS) ? dec_ct_raddr : 13'd0;
     assign ct_wdata = enc_ct_wdata;
 
-    // Shared secret
     assign ss_valid      = (active_op == OP_ENCAPS) ? enc_ss_valid :
                            (active_op == OP_DECAPS) ? dec_ss_valid : 1'b0;
     assign shared_secret = (active_op == OP_ENCAPS) ? enc_shared_secret :
                            (active_op == OP_DECAPS) ? dec_shared_secret : 256'd0;
+
+    assign op_error      = (active_op == OP_ENCAPS) ? enc_ek_invalid :
+                           (active_op == OP_DECAPS) ? dec_dk_invalid : 1'b0;
 
 endmodule

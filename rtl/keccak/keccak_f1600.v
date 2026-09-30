@@ -35,7 +35,6 @@ module keccak_f1600 (
     output reg           busy
 );
 
-    // Round constants (FIPS 202, Table 1)
     function [63:0] round_constant;
         input [4:0] round_idx;
         begin
@@ -69,17 +68,14 @@ module keccak_f1600 (
         end
     endfunction
 
-    // State register
     reg [1599:0] state_reg;
     reg [4:0]    round_cnt;
 
-    // Round function wires
     wire [1599:0] round_out;
     wire [63:0]   rc;
 
     assign rc = round_constant(round_cnt);
 
-    // Instantiate single round
     keccak_round u_round (
         .state_in    (state_reg),
         .round_const (rc),
@@ -88,7 +84,6 @@ module keccak_f1600 (
 
     assign state_out = state_reg;
 
-    // FSM
     localparam S_IDLE    = 2'd0;
     localparam S_RUNNING = 2'd1;
     localparam S_DONE    = 2'd2;

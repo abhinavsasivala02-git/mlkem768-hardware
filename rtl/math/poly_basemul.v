@@ -36,21 +36,17 @@ module poly_basemul (
     output reg         done,
     output reg         busy,
 
-    // RAM for polynomial A (NTT domain) - read-only
     output reg  [7:0]  a_addr,
     input  wire [11:0] a_rdata,
 
-    // RAM for polynomial B (NTT domain) - read-only
     output reg  [7:0]  b_addr,
     input  wire [11:0] b_rdata,
 
-    // RAM for result C - write-only
     output reg         c_wen,
     output reg  [7:0]  c_addr,
     output reg  [11:0] c_wdata
 );
 
-    // FSM states
     localparam S_IDLE    = 4'd0;
     localparam S_RD_A0B0 = 4'd1;
     localparam S_WT_A0B0 = 4'd2;
@@ -69,30 +65,22 @@ module poly_basemul (
 
     reg [3:0] state, next_state;
 
-    // Pair index (0..127)
     reg [6:0] pair_idx;
 
-    // Latched coefficient values
     reg signed [15:0] a0, a1, b0, b1;
 
-    // Zeta value for gamma (pair twiddle)
     wire signed [15:0] gamma_val;
     reg  [6:0] gamma_addr;
 
-    // Montgomery products
-    (* use_dsp = "no" *) wire signed [31:0] prod_a0b0, prod_a1b1, prod_a0b1, prod_a1b0;
-    (* use_dsp = "no" *) wire signed [31:0] prod_a1b1g;
-    (* use_dsp = "no" *) wire signed [31:0] prod_c0_conv, prod_c1_conv;
+    wire signed [31:0] prod_a0b0, prod_a1b1, prod_a0b1, prod_a1b0;
+    wire signed [31:0] prod_a1b1g;
+    wire signed [31:0] prod_c0_conv, prod_c1_conv;
     wire [11:0] m_a0b0, m_a1b1g, m_a0b1, m_a1b0;
     wire [11:0] m_a1b1_raw;
     wire [11:0] m_c0, m_c1;
 
-    // Result accumulators
     reg signed [15:0] c0_val, c1_val;
 
-    // Gamma ROM - uses the same zeta ROM with offset addressing
-    // gamma_i = zetas[64 + (i>>1)] for the basemul twiddles (synchronous BRAM)
-    // Sign flip: gamma[p] = (-1)^p * zetas[64 + (p>>1)]
     wire signed [15:0] gamma_sign;
     assign gamma_sign = pair_idx[0] ? -gamma_val : gamma_val;
 
@@ -102,14 +90,11 @@ module poly_basemul (
         .zeta (gamma_val)
     );
 
-    // Montgomery multiplication instances
     assign prod_a0b0 = a0 * b0;
     assign prod_a1b1 = a1 * b1;
     assign prod_a0b1 = a0 * b1;
     assign prod_a1b0 = a1 * b0;
     assign prod_a1b1g = $signed({4'b0, m_a1b1_raw}) * gamma_sign;
-    // Convert Montgomery-domain sum back to plain: c = mont(s * R^2)
-    // since R^2 mod q = 1353 and mont(x) = x*R^-1 mod q  =>  c = s*R mod q
     assign prod_c0_conv = $signed(c0_val) * 16'sd1353;
     assign prod_c1_conv = $signed(c1_val) * 16'sd1353;
 
@@ -121,13 +106,11 @@ module poly_basemul (
     montgomery_reduce u_mont_c0    (.a(prod_c0_conv), .result(m_c0));
     montgomery_reduce u_mont_c1    (.a(prod_c1_conv), .result(m_c1));
 
-    // FSM sequential
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= S_IDLE;
         else        state <= next_state;
     end
 
-    // FSM combinational
     always @(*) begin
         next_state = state;
         case (state)
@@ -150,7 +133,6 @@ module poly_basemul (
         endcase
     end
 
-    // Datapath
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             done       <= 1'b0;
@@ -185,7 +167,6 @@ module poly_basemul (
                 end
 
                 S_WT_A0B0: begin
-                    // Wait for synchronous read latency on even-index data
                 end
 
                 S_LAT_A0: begin
@@ -199,7 +180,6 @@ module poly_basemul (
                 end
 
                 S_WT_A1B1: begin
-                    // Wait for synchronous read latency on odd-index data
                 end
 
                 S_LAT_A1: begin
@@ -208,22 +188,18 @@ module poly_basemul (
                 end
 
                 S_COMP_C0: begin
-                    // c0 = mont(a0*b0) + mont(mont(a1*b1) * gamma)
                     c0_val <= $signed({1'b0, m_a0b0}) + $signed({1'b0, m_a1b1g});
                 end
 
                 S_COMP_C1: begin
-                    // c1 = mont(a0*b1) + mont(a1*b0)
                     c1_val <= $signed({1'b0, m_a0b1}) + $signed({1'b0, m_a1b0});
                 end
 
                 S_CONV_C0: begin
-                    // Convert Montgomery-domain sum back to plain
                     c0_val <= $signed({4'b0, m_c0});
                 end
 
                 S_CONV_C1: begin
-                    // Convert Montgomery-domain sum back to plain
                     c1_val <= $signed({4'b0, m_c1});
                 end
 

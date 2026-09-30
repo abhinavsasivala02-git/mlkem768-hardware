@@ -36,7 +36,6 @@ module ntt_rom (
     output reg  signed [15:0] zeta
 );
 
-    // Combinational ROM - pure case statement, synthesis-safe
     reg signed [15:0] zeta_comb;
 
     always @(*) begin
@@ -173,7 +172,6 @@ module ntt_rom (
         endcase
     end
 
-    // Synchronous registered output - Genus/ASIC infers BRAM or DFF-bank
     always @(posedge clk) begin
         zeta <= zeta_comb;
     end

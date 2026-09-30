@@ -45,25 +45,51 @@ module mlkem_encaps #(
     output reg           done,
     output reg           busy,
 
-    // Encapsulation key input buffer
     input  wire [7:0]    ek_rdata,
     output reg  [12:0]   ek_raddr,
 
-    // Ciphertext output
     output reg           ct_wen,
     output reg  [12:0]   ct_addr,
     output reg  [7:0]    ct_wdata,
 
-    // Shared secret output (32 bytes)
     output reg           ss_valid,
-    output reg  [255:0]  shared_secret
+    output reg  [255:0]  shared_secret,
+
+    output reg           enc_start,
+    output wire [255:0]  enc_message,
+    output wire [255:0]  enc_r_seed,
+    output reg           enc_ek_valid,
+    output reg  [7:0]    enc_ek_data,
+    input  wire          enc_done,
+    input  wire          enc_ek_req,
+    input  wire          enc_ct_valid,
+    input  wire [7:0]    enc_ct_data,
+    input  wire [12:0]   enc_ct_addr,
+
+    output wire [27:0]   hb_req,
+    input  wire [10:0]   hb_rsp,
+
+    output reg           ek_invalid
 );
+    wire [27:0] hb_req_h;  wire [10:0] hb_rsp_h;
+    wire [27:0] hb_req_g;  wire [10:0] hb_rsp_g;
+    wire [2*11-1:0] hb_rsp_v;
+    assign hb_rsp_h = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_g = hb_rsp_v[1*11 +: 11];
+
+    hash_mux #(.N(2)) u_hash_mux (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .c_req ({hb_req_g, hb_req_h}),
+        .c_rsp (hb_rsp_v),
+        .m_req (hb_req),
+        .m_rsp (hb_rsp)
+    );
 
     `include "mlkem_params.vh"
 
     localparam EK_SIZE = 384 * K + 32;
 
-    // FSM
     localparam ST_IDLE       = 4'd0;
     localparam ST_HASH_EK    = 4'd1;   // H(ek)
     localparam ST_WAIT_H_EK  = 4'd2;
@@ -73,24 +99,16 @@ module mlkem_encaps #(
     localparam ST_WAIT_ENC   = 4'd6;
     localparam ST_OUTPUT     = 4'd7;
     localparam ST_DONE       = 4'd8;
-    localparam ST_COPY_EK    = 4'd9;   // buffer ek bytes into internal RAM
 
     reg [3:0] state;
 
-    // H(ek) — SHA3-256
     reg          h_start;
-    reg          h_data_valid;
-    reg          h_data_last;
-    reg          h_prs;        // a byte is presented & awaiting absorption
-    reg          h_lst;        // the presented byte is the last one
-    reg  [7:0]   h_data_in;
+    wire         h_data_valid;
+    wire [7:0]   h_data_in;
+    wire         h_data_last;
     wire         h_hash_valid;
     wire [255:0] h_hash_out;
 
-    // h_data_ready: back-pressure from SHA3-256 engine.
-    // MUST be checked before advancing feed_cnt; otherwise bytes sent
-    // during mid-block Keccak permutations are silently dropped and
-    // absorb_last can arrive while engine is busy — deadlock.
     wire h_data_ready;
 
     sha3_256 u_h_hash (
@@ -103,16 +121,15 @@ module mlkem_encaps #(
         .data_last  (h_data_last),
         .hash_valid (h_hash_valid),
         .hash_out   (h_hash_out),
-        .busy       ()
+        .busy       (),
+        .hb_req     (hb_req_h),
+        .hb_rsp     (hb_rsp_h)
     );
 
-    // G(m || h) — SHA3-512
     reg          g_start;
-    reg          g_data_valid;
-    reg          g_data_last;
-    reg          g_prs;        // a byte is presented & awaiting absorption
-    reg          g_lst;        // the presented byte is the last one
-    reg  [7:0]   g_data_in;
+    wire         g_data_valid;
+    wire [7:0]   g_data_in;
+    wire         g_data_last;
     wire         g_hash_valid;
     wire [511:0] g_hash_out;
     wire         g_data_ready;
@@ -127,61 +144,40 @@ module mlkem_encaps #(
         .data_last  (g_data_last),
         .hash_valid (g_hash_valid),
         .hash_out   (g_hash_out),
-        .busy       ()
+        .busy       (),
+        .hb_req     (hb_req_g),
+        .hb_rsp     (hb_rsp_g)
     );
 
-    // K-PKE.Encrypt
-    reg          enc_start;
-    wire         enc_done;
-    wire         enc_busy;
+    localparam TBYTES = 384 * K;
+    reg [1:0]  mod_phase;
+    reg [7:0]  mod_b0, mod_b1;
+    wire [11:0] mod_d1 = {mod_b1[3:0], mod_b0};
+    wire [11:0] mod_d2 = {h_data_in,   mod_b1[7:4]};
 
-    // EK streaming feed to kpke_encrypt
-    reg          enc_ek_valid;
-    reg  [7:0]   enc_ek_data;
-    wire         enc_ek_req;
-
-    // CT output from kpke_encrypt
-    wire         enc_ct_valid;
-    wire [7:0]   enc_ct_data;
-    wire [12:0]  enc_ct_addr;
-
-    // Stored values
     reg [255:0] h_ek;         // H(ek)
     reg [255:0] k_value;      // Shared secret K
     reg [255:0] r_value;      // Deterministic randomness r
 
-    kpke_encrypt #(.K(K), .ETA1(ETA1), .ETA2(ETA2), .DU(DU), .DV(DV)) u_kpke_enc (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .start    (enc_start),
-        .done     (enc_done),
-        .busy     (enc_busy),
-        .ek_valid (enc_ek_valid),
-        .ek_data  (enc_ek_data),
-        .ek_req   (enc_ek_req),
-        .message  (m_random),
-        .r_seed   (r_value),
-        .ct_valid (enc_ct_valid),
-        .ct_data  (enc_ct_data),
-        .ct_addr  (enc_ct_addr)
-    );
+    assign enc_message = m_random;
+    assign enc_r_seed  = r_value;
 
-    // Counters
     reg [12:0] feed_cnt;
     reg [5:0]  byte_cnt;
 
-    // Internal EK buffer: the whole encapsulation key is copied here first,
-    // then hashed / streamed to K-PKE.Encrypt from this register array
-    // (combinational reads), avoiding the 1-cycle latency of the external
-    // ek_rdata/ek_raddr buffer (same approach as mlkem_keygen).
-    reg [7:0]  ek_buf [0:1183];
-    reg [12:0] copy_cnt;        // EK copy / hash index
-
-    // EK feed pipeline: 1-cycle read latency from buffer
-    // Cycle N: set ek_raddr = feed_cnt
-    // Cycle N+1: ek_rdata valid → feed to enc_ek_data
-    reg        ek_read_pending;
+    reg [1:0]  ek_rd_cnt;     // countdown while a buffer read is in flight
     reg [12:0] ek_feed_cnt;   // total bytes fed to encrypt so far
+    reg [1:0]  ek_rd_age;     // cycles since ek_raddr settled on feed_cnt
+
+    assign h_data_valid = (state == ST_HASH_EK) && (ek_raddr == feed_cnt) &&
+                          (ek_rd_age == 2'd2);
+    assign h_data_in    = ek_rdata;
+    assign h_data_last  = h_data_valid && (feed_cnt == EK_SIZE[12:0] - 13'd1);
+
+    assign g_data_valid = (state == ST_HASH_MH);
+    assign g_data_in    = (byte_cnt < 6'd32) ? m_random[byte_cnt[4:0]*8 +: 8]
+                                             : h_ek[byte_cnt[4:0]*8 +: 8];
+    assign g_data_last  = g_data_valid && (byte_cnt == 6'd63);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -195,18 +191,12 @@ module mlkem_encaps #(
             ct_wdata      <= 8'd0;
             ek_raddr      <= 13'd0;
             h_start       <= 1'b0;
-            h_data_valid  <= 1'b0;
-            h_data_last   <= 1'b0;
-            h_data_in     <= 8'd0;
-            h_prs         <= 1'b0;
-            h_lst         <= 1'b0;
             g_start       <= 1'b0;
-            g_data_valid  <= 1'b0;
-            g_data_last   <= 1'b0;
-            g_prs         <= 1'b0;
-            g_lst         <= 1'b0;
-            g_data_in     <= 8'd0;
-            g_data_last   <= 1'b0;
+            ek_rd_age     <= 2'd0;
+            ek_invalid    <= 1'b0;
+            mod_phase     <= 2'd0;
+            mod_b0        <= 8'd0;
+            mod_b1        <= 8'd0;
             enc_start     <= 1'b0;
             enc_ek_valid  <= 1'b0;
             enc_ek_data   <= 8'd0;
@@ -215,23 +205,17 @@ module mlkem_encaps #(
             r_value       <= 256'd0;
             feed_cnt      <= 13'd0;
             byte_cnt      <= 6'd0;
-            ek_read_pending <= 1'b0;
+            ek_rd_cnt     <= 2'd0;
             ek_feed_cnt   <= 13'd0;
-            copy_cnt      <= 13'd0;
         end else begin
             done          <= 1'b0;
             ss_valid      <= 1'b0;
             ct_wen        <= 1'b0;
             h_start       <= 1'b0;
-            h_data_valid  <= 1'b0;
-            h_data_last   <= 1'b0;
             g_start       <= 1'b0;
-            g_data_valid  <= 1'b0;
-            g_data_last   <= 1'b0;
             enc_start     <= 1'b0;
             enc_ek_valid  <= 1'b0;
 
-            // Forward CT output from kpke_encrypt to external buffer
             if (enc_ct_valid) begin
                 ct_wen   <= 1'b1;
                 ct_addr  <= enc_ct_addr;
@@ -242,100 +226,61 @@ module mlkem_encaps #(
                 ST_IDLE: begin
                     busy <= 1'b0;
                     if (start) begin
-                        busy           <= 1'b1;
-                        h_start        <= 1'b1;
-                        feed_cnt       <= 13'd0;
-                        copy_cnt       <= 13'd0;
-                        ek_read_pending <= 1'b0;
-                        state          <= ST_COPY_EK;
+                        busy     <= 1'b1;
+                        h_start    <= 1'b1;
+                        feed_cnt   <= 13'd0;
+                        ek_rd_age  <= 2'd0;
+                        ek_invalid <= 1'b0;
+                        mod_phase  <= 2'd0;
+                        state      <= ST_HASH_EK;
                     end
                 end
 
-                // Copy all EK bytes from the external read buffer into the
-                // internal ek_buf register array. The buffer has a 2-cycle
-                // read latency (NBA ek_raddr -> core addr mux -> ek_rdata_reg),
-                // so the byte for address k appears in ek_rdata when copy_cnt
-                // has advanced to k+2 — store it at index (copy_cnt-2).
-                ST_COPY_EK: begin
-                    ek_raddr <= copy_cnt;
-                    if (copy_cnt >= 13'd2)
-                        ek_buf[copy_cnt - 13'd2] <= ek_rdata;
-                    if (copy_cnt == EK_SIZE[12:0] + 13'd1) begin
-                        copy_cnt <= 13'd0;
-                        state    <= ST_HASH_EK;
-                    end else begin
-                        copy_cnt <= copy_cnt + 13'd1;
-                    end
-                end
-
-                // Feed ek bytes to H() from ek_buf (combinational reads).
-                // h_data_ready must be checked: SHA3-256 rate=136 and ek=1184
-                // bytes → several mid-block permutations where absorb_ready
-                // drops for ~24 cycles. Without gating, bytes are dropped and
-                // absorb_last can arrive while the engine is busy — deadlock.
                 ST_HASH_EK: begin
-                    // Feed ek bytes to H() from ek_buf (combinational reads).
-                    // Two-phase, absorb-acknowledged handshake:
-                    //   phase 1 (h_data_ready && !h_prs): present the byte for
-                    //          copy_cnt, raise h_data_valid, remember h_prs.
-                    //   phase 2 (h_prs): the engine absorbed the presented byte
-                    //          one cycle later; advance copy_cnt (or finish on
-                    //          the last byte).
-                    // Because the presented byte is only advanced once it has
-                    // been absorbed, mid-block Keccak permutations never cause a
-                    // byte to be duplicated or skipped.
-                    h_data_valid <= 1'b0;
-                    h_data_last  <= 1'b0;
-                    if (h_prs) begin
-                        h_prs <= 1'b0;
-                        if (h_lst) begin
+                    if (ek_raddr != feed_cnt) begin
+                        ek_raddr  <= feed_cnt;
+                        ek_rd_age <= 2'd0;
+                    end else if (ek_rd_age != 2'd2) begin
+                        ek_rd_age <= ek_rd_age + 2'd1;
+                    end
+                    if (h_data_valid && h_data_ready) begin
+                        if (feed_cnt < TBYTES[12:0]) begin
+                            case (mod_phase)
+                                2'd0: begin mod_b0 <= h_data_in; mod_phase <= 2'd1; end
+                                2'd1: begin mod_b1 <= h_data_in; mod_phase <= 2'd2; end
+                                default: begin
+                                    if (mod_d1 >= 12'd3329 || mod_d2 >= 12'd3329)
+                                        ek_invalid <= 1'b1;
+                                    mod_phase <= 2'd0;
+                                end
+                            endcase
+                        end
+                        if (feed_cnt == EK_SIZE[12:0] - 13'd1)
                             state <= ST_WAIT_H_EK;
-                        end else begin
-                            copy_cnt <= copy_cnt + 13'd1;
-                        end
-                    end else if (h_data_ready) begin
-                        h_data_valid <= 1'b1;
-                        h_data_in    <= ek_buf[copy_cnt];
-                        h_prs        <= 1'b1;
-                        if (copy_cnt == EK_SIZE[12:0] - 13'd1) begin
-                            h_data_last <= 1'b1;
-                            h_lst       <= 1'b1;
-                        end
+                        else
+                            feed_cnt <= feed_cnt + 13'd1;
                     end
                 end
 
                 ST_WAIT_H_EK: begin
                     if (h_hash_valid) begin
                         h_ek     <= h_hash_out;
-                        g_start  <= 1'b1;
-                        byte_cnt <= 6'd0;
-                        state    <= ST_HASH_MH;
+                        if (ek_invalid) begin
+                            state <= ST_DONE;
+                        end else begin
+                            g_start  <= 1'b1;
+                            byte_cnt <= 6'd0;
+                            state    <= ST_HASH_MH;
+                        end
                     end
                 end
 
-                // Feed m || H(ek) to G() — absorb-acknowledged handshake.
-                // 64 bytes: 32 of m, 32 of h_ek.
                 ST_HASH_MH: begin
-                    g_data_valid <= 1'b0;
-                    g_data_last  <= 1'b0;
-                    if (g_prs) begin
-                        g_prs <= 1'b0;
-                        if (g_lst) begin
+                    if (g_data_valid && g_data_ready) begin
+                        if (byte_cnt == 6'd63)
                             state <= ST_WAIT_G;
-                        end else begin
-                            byte_cnt <= byte_cnt + 6'd1;
-                        end
-                    end else if (g_data_ready) begin
-                        g_data_valid <= 1'b1;
-                        if (byte_cnt < 6'd32)
-                            g_data_in <= m_random[byte_cnt*8 +: 8];
                         else
-                            g_data_in <= h_ek[(byte_cnt - 6'd32)*8 +: 8];
-                        g_prs <= 1'b1;
-                        if (byte_cnt == 6'd63) begin
-                            g_data_last <= 1'b1;
-                            g_lst       <= 1'b1;
-                        end
+                            byte_cnt <= byte_cnt + 6'd1;
                     end
                 end
 
@@ -345,27 +290,33 @@ module mlkem_encaps #(
                         r_value     <= g_hash_out[511:256];  // r = last 32 bytes
                         enc_start   <= 1'b1;
                         ek_feed_cnt <= 13'd0;
+                        ek_rd_cnt   <= 2'd0;
                         state       <= ST_ENCRYPT;
                     end
                 end
 
-                // Stream EK bytes from ek_buf to kpke_encrypt when it requests
-                // them. ek_buf is a register array (combinational read), so the
-                // byte is available immediately — present it on ek_req and
-                // advance the pointer. This avoids the off-by-one / duplication
-                // that a 1-cycle-latency external buffer introduced.
                 ST_ENCRYPT: begin
-                    state <= ST_WAIT_ENC;
+                    ek_feed_cnt <= 13'd0;
+                    ek_rd_cnt   <= 2'd0;
+                    state       <= ST_WAIT_ENC;
                 end
 
                 ST_WAIT_ENC: begin
-                    enc_ek_valid <= 1'b0;
-                    if (enc_ek_req) begin
-                        enc_ek_valid <= 1'b1;
-                        enc_ek_data  <= ek_buf[ek_feed_cnt];
-                        if (ek_feed_cnt < EK_SIZE[12:0] - 13'd1)
-                            ek_feed_cnt <= ek_feed_cnt + 13'd1;
+                    if (ek_rd_cnt != 2'd0) begin
+                        ek_rd_cnt <= ek_rd_cnt - 2'd1;
+                        if (ek_rd_cnt == 2'd1) begin
+                            enc_ek_valid <= 1'b1;
+                            enc_ek_data  <= ek_rdata;
+                        end
                     end
+
+                    if (enc_ek_req && ek_rd_cnt == 2'd0 &&
+                        ek_feed_cnt < EK_SIZE[12:0]) begin
+                        ek_raddr    <= ek_feed_cnt;
+                        ek_feed_cnt <= ek_feed_cnt + 13'd1;
+                        ek_rd_cnt   <= 2'd3;
+                    end
+
                     if (enc_done) begin
                         state <= ST_OUTPUT;
                     end

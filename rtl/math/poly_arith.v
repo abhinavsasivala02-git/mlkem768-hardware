@@ -34,23 +34,18 @@ module poly_arith (
     output reg         done,
     output reg         busy,
 
-    // Polynomial A RAM - read-only
     output reg  [7:0]  a_addr,
     input  wire [11:0] a_rdata,
 
-    // Polynomial B RAM - read-only (unused for tomont)
     output reg  [7:0]  b_addr,
     input  wire [11:0] b_rdata,
 
-    // Result C RAM - write
     output reg         c_wen,
     output reg  [7:0]  c_addr,
     output reg  [11:0] c_wdata
 );
 
-    // ---- Parameters (inlined from mlkem_params.vh) ----
     localparam MLKEM_MONT_RSQ = 16'd1353;
-    // ---------------------------------------------------
     localparam S_IDLE  = 3'd0;
     localparam S_READ  = 3'd1;
     localparam S_WAIT  = 3'd2;
@@ -62,15 +57,12 @@ module poly_arith (
     reg [2:0] state, next_state;
     reg [8:0] idx;   // 0..255
 
-    // Arithmetic results
     wire [11:0] add_result;
     wire [11:0] sub_result;
 
-    // toMont: a * R^2 mod q via Montgomery
-    (* use_dsp = "no" *) wire signed [31:0] mont_product;
+    wire signed [31:0] mont_product;
     wire        [11:0] mont_result;
 
-    // Modular add/sub
     modular_arith u_mod_add (
         .a      (a_rdata),
         .b      (b_rdata),
@@ -85,7 +77,6 @@ module poly_arith (
         .result (sub_result)
     );
 
-    // toMont: multiply by R^2 using Montgomery reduction
     assign mont_product = $signed({4'b0, a_rdata}) * $signed({1'b0, MLKEM_MONT_RSQ});
 
     montgomery_reduce u_mont (
@@ -93,13 +84,11 @@ module poly_arith (
         .result (mont_result)
     );
 
-    // FSM sequential
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= S_IDLE;
         else        state <= next_state;
     end
 
-    // FSM combinational
     always @(*) begin
         next_state = state;
         case (state)
@@ -114,7 +103,6 @@ module poly_arith (
         endcase
     end
 
-    // Datapath
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             done    <= 1'b0;
@@ -144,11 +132,9 @@ module poly_arith (
                 end
 
                 S_WAIT: begin
-                    // RAM latency
                 end
 
                 S_COMP: begin
-                    // Select result based on mode
                 end
 
                 S_WRITE: begin

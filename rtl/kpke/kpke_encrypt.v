@@ -59,10 +59,26 @@ module kpke_encrypt #(
 
     output reg           ct_valid,
     output reg  [7:0]    ct_data,
-    output reg  [12:0]   ct_addr
-);
+    output reg  [12:0]   ct_addr,
 
-    // ======================== FSM ========================
+    output wire [27:0]   hb_req,
+    input  wire [10:0]   hb_rsp
+);
+    wire [27:0] hb_req_xof;  wire [10:0] hb_rsp_xof;
+    wire [27:0] hb_req_prf;  wire [10:0] hb_rsp_prf;
+    wire [2*11-1:0] hb_rsp_v;
+    assign hb_rsp_xof = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_prf = hb_rsp_v[1*11 +: 11];
+
+    hash_mux #(.N(2)) u_hash_mux (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .c_req ({hb_req_prf, hb_req_xof}),
+        .c_rsp (hb_rsp_v),
+        .m_req (hb_req),
+        .m_rsp (hb_rsp)
+    );
+
     localparam ST_IDLE         = 6'd0;
     localparam ST_DECODE_EK    = 6'd1;
     localparam ST_WAIT_DEC_EK  = 6'd2;
@@ -124,7 +140,6 @@ module kpke_encrypt #(
     reg [4:0] rho_byte_cnt;
     reg [255:0] rho;
 
-    // ======================== RAM Bank ========================
     wire [11:0] ram0_rdata_a, ram0_rdata_b;
     reg         ram0_wen; reg [9:0]  ram0_addr_a, ram0_addr_b; reg [11:0] ram0_wdata;
 
@@ -150,12 +165,13 @@ module kpke_encrypt #(
     poly_ram u_ram4 (.clk(clk),.a_wen(ram4_wen),.a_addr(ram4_addr_a),.a_wdata(ram4_wdata),.a_rdata(ram4_rdata_a),.b_addr(ram4_addr_b),.b_rdata(ram4_rdata_b));
     poly_ram u_ram5 (.clk(clk),.a_wen(ram5_wen),.a_addr(ram5_addr_a),.a_wdata(ram5_wdata),.a_rdata(ram5_rdata_a),.b_addr(ram5_addr_b),.b_rdata(ram5_rdata_b));
 
-    // ======================== Sub-module instances ========================
     reg sntt_start; wire sntt_done, sntt_busy, sntt_wen; wire [7:0] sntt_addr; wire [11:0] sntt_wdata;
     sample_ntt u_sample_ntt (
         .clk(clk),.rst_n(rst_n),.start(sntt_start),.seed(rho),
         .idx_i({4'd0,j_cnt}),.idx_j({4'd0,i_cnt}),.done(sntt_done),.busy(sntt_busy),
-        .poly_wen(sntt_wen),.poly_addr(sntt_addr),.poly_wdata(sntt_wdata)
+        .poly_wen(sntt_wen),.poly_addr(sntt_addr),.poly_wdata(sntt_wdata),
+        .hb_req        (hb_req_xof),
+        .hb_rsp        (hb_rsp_xof)
     );
 
     reg prf_start, prf_absorb_valid, prf_absorb_last, prf_squeeze_req;
@@ -166,7 +182,9 @@ module kpke_encrypt #(
         .absorb_valid(prf_absorb_valid),.absorb_data(prf_absorb_data),
         .absorb_ready(prf_absorb_ready),.absorb_last(prf_absorb_last),
         .squeeze_req(prf_squeeze_req),.squeeze_valid(prf_squeeze_valid),
-        .squeeze_data(prf_squeeze_data),.busy(prf_busy)
+        .squeeze_data(prf_squeeze_data),.busy(prf_busy),
+        .hb_req        (hb_req_prf),
+        .hb_rsp        (hb_rsp_prf)
     );
 
     reg cbd_start; wire cbd_done, cbd_busy, cbd_wen, cbd_prf_req; wire [7:0] cbd_addr; wire [11:0] cbd_wdata;
@@ -183,11 +201,8 @@ module kpke_encrypt #(
         .poly_wen(cbd2_wen),.poly_addr(cbd2_addr),.poly_wdata(cbd2_wdata)
     );
 
-    // Unified NTT core (forward & inverse via mode)
     reg ntt_start; reg ntt_mode; wire ntt_done, ntt_busy, ntt_wen;
     wire [7:0] ntt_addr_a, ntt_addr_b; wire [11:0] ntt_wdata_a;
-    // NTT/INTT RAM mux: selects which RAM the core operates on
-    // ntt_ram_sel: 0=ram0[i*256..] (in-place forward NTT of r), 1=ram2 (INTT u), 2=ram4 (INTT v)
     reg [1:0] ntt_ram_sel;
     wire [11:0] ntt_rd_a = (ntt_ram_sel == 2'd2) ? ram4_rdata_a :
                            (ntt_ram_sel == 2'd1) ? ram2_rdata_a : ram0_rdata_a;
@@ -202,8 +217,6 @@ module kpke_encrypt #(
 
     reg bmul_start; wire bmul_done, bmul_busy, bmul_wen;
     wire [7:0] bmul_a_addr, bmul_b_addr, bmul_c_addr; wire [11:0] bmul_c_wdata;
-    // For A^T*r: a_rdata = ram3 (A_hat stream), b_rdata = ram0 (y_hat)
-    // For t^T*r: a_rdata = ram1 (t_hat),         b_rdata = ram0 (y_hat)
     wire [11:0] bmul_a_rd, bmul_b_rd;
     reg bmul_use_t;
     assign bmul_a_rd = bmul_use_t ? ram1_rdata_a : ram3_rdata_a;
@@ -269,7 +282,6 @@ module kpke_encrypt #(
         .byte_valid(enc_c2_byte_valid),.byte_data(enc_c2_byte_data),.byte_addr(enc_c2_byte_addr)
     );
 
-    // ======================== Combinational RAM Mux ========================
     always @(*) begin
         ram0_wen=0; ram0_addr_a=10'd0; ram0_addr_b=10'd0; ram0_wdata=12'd0;
         ram1_wen=0; ram1_addr_a=10'd0; ram1_addr_b=10'd0; ram1_wdata=12'd0;
@@ -290,21 +302,17 @@ module kpke_encrypt #(
             ST_WAIT_CBD_R: begin
                 ram0_wen = cbd_wen; ram0_addr_a = {i_cnt[1:0], cbd_addr}; ram0_wdata = cbd_wdata;
             end
-            // NTT(r[i]): in-place on ram0[i*256..]
             ST_NTT_R, ST_WAIT_NTT_R: begin
                 ram0_addr_a = {i_cnt[1:0], ntt_addr_a}; ram0_addr_b = {i_cnt[1:0], ntt_addr_b};
                 ram0_wen = ntt_wen; ram0_wdata = ntt_wdata_a;
             end
-            // INTT states also use ntt_core
             ST_INTT_U, ST_WAIT_INTT_U: begin
                 ram2_addr_a = ntt_addr_a; ram2_addr_b = ntt_addr_b;
                 ram2_wen = ntt_wen; ram2_wdata = ntt_wdata_a;
             end
-            // A_hat[i][j] sampled into ram3 (scratch)
             ST_WAIT_SNTT: begin
                 ram3_wen = sntt_wen; ram3_addr_a = sntt_addr; ram3_wdata = sntt_wdata;
             end
-            // u-path basemul: a = A_hat (ram3), b = y_hat[j] (ram0 port B), product -> ram3
             ST_BASEMUL_ATR, ST_WAIT_MUL_ATR: begin
                 ram3_addr_a = bmul_wen ? bmul_c_addr : bmul_a_addr;
                 ram0_addr_b = {j_cnt[1:0], bmul_b_addr};
@@ -315,7 +323,6 @@ module kpke_encrypt #(
                 ram3_addr_a = arith_b_addr;
                 ram2_wen = arith_wen; ram2_wdata = arith_c_wdata;
             end
-            // (INTT_U handled above with NTT_R)
             ST_WAIT_CBD_E1: begin
                 ram4_wen = cbd2_wen; ram4_addr_a = cbd2_addr; ram4_wdata = cbd2_wdata;
             end
@@ -334,7 +341,6 @@ module kpke_encrypt #(
             ST_CLR_V: begin
                 ram4_wen = 1'b1; ram4_addr_a = clr_idx[7:0]; ram4_wdata = 12'd0;
             end
-            // v-path basemul: a = t_hat[j] (ram1), b = y_hat[j] (ram0 port B), product -> ram3
             ST_BASEMUL_TR, ST_WAIT_MUL_TR: begin
                 ram1_addr_a = {j_cnt[1:0], bmul_a_addr};
                 ram0_addr_b = {j_cnt[1:0], bmul_b_addr};
@@ -358,7 +364,6 @@ module kpke_encrypt #(
                 ram4_wen = arith_wen; ram4_wdata = arith_c_wdata;
             end
             ST_LOAD_MSG: begin
-                // Decompress_1(m) -> ram3 so arith (b=ram3) can add it to v
                 ram3_wen = 1'b1; ram3_addr_a = clr_idx[7:0];
                 ram3_wdata = message[clr_idx[7:0]] ? 12'd1665 : 12'd0;
             end
@@ -378,7 +383,6 @@ module kpke_encrypt #(
         endcase
     end
 
-    // ======================== FSM Logic ========================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state<=ST_IDLE; done<=0; busy<=0; ct_valid<=0; ct_data<=0; ct_addr<=0; ek_req<=0;
@@ -406,7 +410,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Decode ek: K polynomials via ByteDecode_12
                 ST_DECODE_EK: state<=ST_WAIT_DEC_EK;
                 ST_WAIT_DEC_EK: begin
                     ek_req <= bdec_byte_req;
@@ -414,7 +417,6 @@ module kpke_encrypt #(
                         if (i_cnt < K-1) begin
                             i_cnt<=i_cnt+1; bdec_start<=1; state<=ST_DECODE_EK;
                         end else begin
-                            // rho is the last 32 bytes of ek (after K t_hat polynomials)
                             i_cnt<=0; rho_byte_cnt<=0; state<=ST_RD_RHO;
                         end
                     end
@@ -438,7 +440,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Sample y[j] for j=0..K-1 (nonce j), NTT each into ram0 slot j
                 ST_PRF_R: begin
                     prf_start<=1; seed_feed_cnt<=0; state<=ST_WAIT_PRF_R;
                 end
@@ -475,8 +476,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // u[i] = INTT(sum_j A^T[i][j] o y_hat[j]) + e1[i]
-                // For each row i:
                 ST_CLR_U: begin
                     if (clr_idx==9'd255) begin
                         j_cnt<=0; state<=ST_GEN_AT;
@@ -516,7 +515,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Sample e1[i] (nonce = K + i), add to u[i]
                 ST_PRF_E1: begin prf_start<=1; seed_feed_cnt<=0; state<=ST_WAIT_PRF_E1; end
                 ST_WAIT_PRF_E1: begin
                     if (prf_absorb_ready) begin
@@ -547,7 +545,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Compress_du(u[i])
                 ST_COMP_U: state<=ST_WAIT_COMP_U;
                 ST_WAIT_COMP_U: begin
                     if (comp_u_done) begin
@@ -555,7 +552,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Encode c1[i]
                 ST_ENC_C1: state<=ST_WAIT_ENC_C1;
                 ST_WAIT_ENC_C1: begin
                     if (enc_c1_byte_valid) begin
@@ -566,14 +562,12 @@ module kpke_encrypt #(
                         if (i_cnt < K-1) begin
                             i_cnt<=i_cnt+1; clr_idx<=0; state<=ST_CLR_U;
                         end else begin
-                            // Now compute v
                             i_cnt<=0; j_cnt<=0; clr_idx<=0;
                             state<=ST_CLR_V;
                         end
                     end
                 end
 
-                // v = INTT(sum_j t_hat[j] o y_hat[j]) + e2 + Decompress_1(m)
                 ST_CLR_V: begin
                     bmul_use_t<=1;
                     if (clr_idx==9'd255) begin
@@ -581,7 +575,6 @@ module kpke_encrypt #(
                     end else clr_idx<=clr_idx+1;
                 end
 
-                // For each j: basemul(t_hat[j], y_hat[j]) and accumulate into ram4 (v)
                 ST_BASEMUL_TR: begin
                     bmul_start<=1; state<=ST_WAIT_MUL_TR;
                 end
@@ -610,7 +603,6 @@ module kpke_encrypt #(
                     end
                 end
 
-                // e2
                 ST_PRF_E2: begin prf_start<=1; seed_feed_cnt<=0; state<=ST_WAIT_PRF_E2; end
                 ST_WAIT_PRF_E2: begin
                     if (prf_absorb_ready) begin
@@ -641,11 +633,8 @@ module kpke_encrypt #(
                     end
                 end
 
-                // Load message bits into ram5 as Decompress_1
                 ST_LOAD_MSG: begin
                     if (clr_idx==9'd255) begin
-                        // Now add ram5 (decomp msg) to ram4 (v)
-                        // Reuse ram3 for decompressed message
                         arith_mode<=2'b00; arith_start<=1; arith_use_v<=1;
                         state<=ST_ADD_MSG;
                     end else clr_idx<=clr_idx+1;
