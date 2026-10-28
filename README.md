@@ -289,6 +289,11 @@ another 1600-bit state.
 Both surface as `op_error` on `mlkem_core`, latched into **`STATUS` bit[2]** and
 cleared on the next start. When set, no shared secret is produced.
 
+**`op_error` is fatal for that operation.** If it is set after Decaps, the
+contents of `SS[0:7]` must not be used as a key — the register still holds
+whatever the previous operation left there, not a shared secret. Treat the
+operation as failed and discard the key.
+
 ---
 
 ## Register map
@@ -298,7 +303,7 @@ AXI4-Lite slave, 32-bit data. Byte address = register index x 4.
 | Offset | Name | Access | Description |
 |---|---|---|---|
 | `0x00` | `CTRL` | W | `[1:0]` op_sel — `00` KeyGen, `01` Encaps, `10` Decaps. `[8]` start |
-| `0x04` | `STATUS` | R | `[0]` busy, `[1]` done (sticky), `[2]` input-check error |
+| `0x04` | `STATUS` | R | `[0]` busy, `[1]` done (sticky), `[2]` input-check error — when set, `SS` is not valid |
 | `0x08`-`0x24` | `SEED_D[0:7]` | W | KeyGen seed `d`, 32 B |
 | `0x28`-`0x44` | `SEED_Z[0:7]` | W | KeyGen implicit-rejection seed `z`, 32 B |
 | `0x48`-`0x64` | `SEED_M[0:7]` | W | Encaps message `m`, 32 B |
@@ -333,7 +338,8 @@ write ek : BUF_SEL=0, BUF_ADDR=0, then 1184 writes of BUF_DATA
 write SEED_M[0..7]
 write CTRL = (1<<8) | 0x1
 poll  STATUS until done
-if (STATUS & 0x4) -> ek rejected by the Sec 7.2 check, no shared secret
+if (STATUS & 0x4) -> ek rejected by Sec 7.2: operation failed,
+//                      do NOT read or use SS[0:7]
 read  c  : BUF_SEL=2, BUF_ADDR=0, then 1088 reads
 read  K  : SS[0..7]
 
@@ -342,7 +348,8 @@ write dk : BUF_SEL=1, ... 2400 bytes
 write c  : BUF_SEL=2, ... 1088 bytes
 write CTRL = (1<<8) | 0x2
 poll  STATUS until done
-if (STATUS & 0x4) -> dk rejected by the Sec 7.3 check
+if (STATUS & 0x4) -> dk rejected by Sec 7.3: operation failed,
+//                      do NOT read or use SS[0:7]
 read  K  : SS[0..7]
 ```
 
@@ -415,9 +422,9 @@ usnistgov/ACVP-Server
 ```
 
 ```sh
-python sim/kat/gen_vectors.py --download -o sim/kat/vectors
-iverilog -g2012 -I sim/kat/vectors -I rtl/pkg -o kat.vvp \
-         sim/tb/tb_kat_multi.v $(find rtl -name '*.v')
+python tb/kat/gen_vectors.py --download -o tb/kat/vectors
+iverilog -g2012 -I tb/kat/vectors -I rtl/pkg -o kat.vvp \
+         tb/tb_kat_multi.v $(find rtl -name '*.v')
 vvp kat.vvp
 ```
 
@@ -427,11 +434,6 @@ vvp kat.vvp
 | `tb_kat_keycheck.v` | §7.2 / §7.3 vs 20 ACVP key-check vectors | 20/20 pass |
 | `tb_mlkem_top.v` | AXI4-Lite + block-RAM buffers, full round trip | pass |
 | `tb_roundtrip.v` | K-PKE KeyGen → Encrypt → Decrypt | pass |
-
-The other benches under `sim/tb/` predate the shared sponge. Any bench that
-instantiates a hash user (`sha3_*`, `shake*`, `kpke_*`, `mlkem_keygen/encaps/decaps`)
-directly must now also attach a `keccak_sponge` and drive its `hb_req`/`hb_rsp`
-bus, since those modules no longer contain their own Keccak state.
 
 **40 official NIST ACVP vectors**, every output byte compared: `ek` (1184 B), the
 complete `dk` (2400 B, so the `H(ek)` and `z` fields are checked too), `c`
@@ -446,14 +448,19 @@ Two properties of the vector selection matter:
 - The key-check set likewise mixes accept and reject cases, so a check wired to a
   constant cannot pass.
 
+`reference/ref_mlkem768.py` is a bit-accurate K-PKE model for cross-checking
+intermediate values (`ek`, `dk`, `ct`, NTT and Keccak internals). Wrapped in
+Algorithms 16-18 it passes all 60 ML-KEM-768 ACVP vectors, so it serves as a
+golden model when debugging.
+
 ---
 
 ## Building
 
 ```sh
 # Simulation (Icarus Verilog)
-python sim/kat/gen_vectors.py --download -o sim/kat/vectors
-iverilog -g2012 -I sim/kat/vectors -I rtl/pkg -o kat.vvp sim/tb/tb_kat_multi.v $(find rtl -name '*.v')
+python tb/kat/gen_vectors.py --download -o tb/kat/vectors
+iverilog -g2012 -I tb/kat/vectors -I rtl/pkg -o kat.vvp tb/tb_kat_multi.v $(find rtl -name '*.v')
 vvp kat.vvp
 
 # Synthesis (Vivado) — writes syn/reports/<part>_<period>ns/
@@ -497,9 +504,9 @@ tb/
 ├── tb_roundtrip.v      K-PKE round trip, self-checking
 └── kat/gen_vectors.py  pulls vectors straight from the NIST ACVP JSON
 
+reference/   ref_mlkem768.py (K-PKE model), ref_keccak.py
 syn/         mlkem.sdc, run_vivado_synth.tcl, run_vivado_impl.tcl,
-             syn_mlkem.tcl
-NIST.FIPS.203.pdf  the standard this implements
+             run_genus.tcl, syn_mlkem.tcl
 ```
 
 ---

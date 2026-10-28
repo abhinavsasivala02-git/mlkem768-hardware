@@ -70,6 +70,34 @@ module mlkem_core #(
     localparam OP_ENCAPS = 2'b01;
     localparam OP_DECAPS = 2'b10;
 
+    wire         enc_start_enc,  enc_start_dec;
+    wire [255:0] enc_msg_enc,    enc_msg_dec;
+    wire [255:0] enc_r_enc,      enc_r_dec;
+    wire         enc_ekv_enc,    enc_ekv_dec;
+    wire [7:0]   enc_ekd_enc,    enc_ekd_dec;
+
+    wire enc_ek_invalid;
+    wire dec_dk_invalid;
+
+    wire [27:0] hb_req_kg, hb_req_en, hb_req_de, hb_req_ke;
+    wire [10:0] hb_rsp_kg, hb_rsp_en, hb_rsp_de, hb_rsp_ke;
+    wire [4*11-1:0] hb_rsp_v;
+    assign hb_rsp_kg = hb_rsp_v[0*11 +: 11];
+    assign hb_rsp_en = hb_rsp_v[1*11 +: 11];
+    assign hb_rsp_de = hb_rsp_v[2*11 +: 11];
+    assign hb_rsp_ke = hb_rsp_v[3*11 +: 11];
+
+    wire [27:0] hb_req_top;
+    wire [10:0] hb_rsp_top;
+
+    wire         sh_enc_done, sh_enc_ek_req;
+    wire         sh_enc_ct_valid;
+    wire [7:0]   sh_enc_ct_data;
+    wire [12:0]  sh_enc_ct_addr;
+
+    reg [1:0] active_op;
+
+
     wire         kg_done, kg_busy;
     wire         kg_ek_wen, kg_dk_wen;
     wire [12:0]  kg_ek_addr, kg_dk_addr;
@@ -178,26 +206,6 @@ module mlkem_core #(
         .hb_rsp   (hb_rsp_ke)
     );
 
-    wire         enc_start_enc,  enc_start_dec;
-    wire [255:0] enc_msg_enc,    enc_msg_dec;
-    wire [255:0] enc_r_enc,      enc_r_dec;
-    wire         enc_ekv_enc,    enc_ekv_dec;
-    wire [7:0]   enc_ekd_enc,    enc_ekd_dec;
-
-    wire enc_ek_invalid;
-    wire dec_dk_invalid;
-
-    wire [27:0] hb_req_kg, hb_req_en, hb_req_de, hb_req_ke;
-    wire [10:0] hb_rsp_kg, hb_rsp_en, hb_rsp_de, hb_rsp_ke;
-    wire [4*11-1:0] hb_rsp_v;
-    assign hb_rsp_kg = hb_rsp_v[0*11 +: 11];
-    assign hb_rsp_en = hb_rsp_v[1*11 +: 11];
-    assign hb_rsp_de = hb_rsp_v[2*11 +: 11];
-    assign hb_rsp_ke = hb_rsp_v[3*11 +: 11];
-
-    wire [27:0] hb_req_top;
-    wire [10:0] hb_rsp_top;
-
     hash_mux #(.N(4)) u_hash_mux_top (
         .clk   (clk),
         .rst_n (rst_n),
@@ -222,13 +230,6 @@ module mlkem_core #(
         .squeeze_next  (hb_req_top[0]),
         .busy          (hb_rsp_top[0])
     );
-
-    wire         sh_enc_done, sh_enc_ek_req;
-    wire         sh_enc_ct_valid;
-    wire [7:0]   sh_enc_ct_data;
-    wire [12:0]  sh_enc_ct_addr;
-
-    reg [1:0] active_op;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)

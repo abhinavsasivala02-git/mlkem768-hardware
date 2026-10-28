@@ -72,6 +72,36 @@ module mlkem_decaps #(
 
     output reg           dk_invalid
 );
+
+    `include "mlkem_params.vh"
+
+    localparam EK_SIZE     = 384 * K + 32;
+    localparam DK_PKE_SIZE = 384 * K;
+    localparam CT_SIZE     = 32 * DU * K + 32 * DV;
+
+    localparam ST_IDLE           = 5'd0;
+    localparam ST_PARSE_DK       = 5'd1;
+    localparam ST_DECRYPT        = 5'd2;
+    localparam ST_FEED_DEC       = 5'd3;
+    localparam ST_WAIT_DEC       = 5'd4;
+    localparam ST_HASH_MH        = 5'd5;   // G(m' || h)
+    localparam ST_WAIT_G         = 5'd6;
+    localparam ST_KDF            = 5'd7;   // KDF(z || c) = SHAKE-256(z || c)
+    localparam ST_KDF_ABSORB_Z   = 5'd8;
+    localparam ST_KDF_ABSORB_C   = 5'd9;
+    localparam ST_WAIT_KDF       = 5'd10;
+    localparam ST_KDF_SQUEEZE    = 5'd11;
+    localparam ST_REENCRYPT      = 5'd12;  // K-PKE.Encrypt(ek, m', r')
+    localparam ST_FEED_REENC     = 5'd13;
+    localparam ST_WAIT_REENC     = 5'd14;
+    localparam ST_COMPARE        = 5'd15;  // Constant-time c == c' check
+    localparam ST_SELECT         = 5'd16;  // Select K' or K̄
+    localparam ST_DONE           = 5'd17;
+    localparam ST_CHK_FEED       = 5'd18;  // Sec 7.3: stream ek into H()
+    localparam ST_CHK_WAIT       = 5'd19;  // Sec 7.3: compare H(ek) with h
+
+    reg [4:0] state;
+
     wire [27:0] hb_req_g;    wire [10:0] hb_rsp_g;
     wire [27:0] hb_req_kdf;  wire [10:0] hb_rsp_kdf;
     wire [27:0] hb_req_h;    wire [10:0] hb_rsp_h;
@@ -114,35 +144,6 @@ module mlkem_decaps #(
         .hb_req     (hb_req_h),
         .hb_rsp     (hb_rsp_h)
     );
-
-    `include "mlkem_params.vh"
-
-    localparam EK_SIZE     = 384 * K + 32;
-    localparam DK_PKE_SIZE = 384 * K;
-    localparam CT_SIZE     = 32 * DU * K + 32 * DV;
-
-    localparam ST_IDLE           = 5'd0;
-    localparam ST_PARSE_DK       = 5'd1;
-    localparam ST_DECRYPT        = 5'd2;
-    localparam ST_FEED_DEC       = 5'd3;
-    localparam ST_WAIT_DEC       = 5'd4;
-    localparam ST_HASH_MH        = 5'd5;   // G(m' || h)
-    localparam ST_WAIT_G         = 5'd6;
-    localparam ST_KDF            = 5'd7;   // KDF(z || c) = SHAKE-256(z || c)
-    localparam ST_KDF_ABSORB_Z   = 5'd8;
-    localparam ST_KDF_ABSORB_C   = 5'd9;
-    localparam ST_WAIT_KDF       = 5'd10;
-    localparam ST_KDF_SQUEEZE    = 5'd11;
-    localparam ST_REENCRYPT      = 5'd12;  // K-PKE.Encrypt(ek, m', r')
-    localparam ST_FEED_REENC     = 5'd13;
-    localparam ST_WAIT_REENC     = 5'd14;
-    localparam ST_COMPARE        = 5'd15;  // Constant-time c == c' check
-    localparam ST_SELECT         = 5'd16;  // Select K' or K̄
-    localparam ST_DONE           = 5'd17;
-    localparam ST_CHK_FEED       = 5'd18;  // Sec 7.3: stream ek into H()
-    localparam ST_CHK_WAIT       = 5'd19;  // Sec 7.3: compare H(ek) with h
-
-    reg [4:0] state;
 
     reg [255:0] h_cached;     // H(ek) from dk
     reg [255:0] z_cached;     // Implicit rejection value from dk
